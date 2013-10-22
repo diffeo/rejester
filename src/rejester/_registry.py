@@ -201,7 +201,7 @@ since the server is busy.
             try:
                 return 'j:' + json.dumps(data)
             except Exception, exc:
-                logger.error('Fail to encode data %r', data, exec_info=True)
+                logger.error('Fail to encode data %r', data, exc_info=True)
                 raise TypeError
 
     def _decode(self, string):
@@ -228,6 +228,7 @@ since the server is busy.
             except:
                 pass
             ## Raise a type error on all other types of data
+            logger.error('Fail to decode string %r', string, exc_info=True)
             raise TypeError
 
     def update(self, dict_name, mapping):
@@ -250,7 +251,7 @@ since the server is busy.
                 --        return -1
                 --    end
                 redis.call("hset",  KEYS[2], ARGV[i], ARGV[i+1])
-                redis.call("rpush", KEYS[2] .. "keys", ARGV[i])
+                redis.call("zadd",  KEYS[2] .. "keys", 0, ARGV[i])
             end
             return 1
         else
@@ -290,7 +291,7 @@ since the server is busy.
         then
             for i = 2, #ARGV do
                 redis.call("hdel", KEYS[2], ARGV[i])
-                redis.call("lrem", KEYS[2] .. "keys", 1, ARGV[i])
+                redis.call("zrem", KEYS[2] .. "keys", ARGV[i])
             end
             return 1
         else
@@ -327,9 +328,10 @@ since the server is busy.
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of dict_name
-            local next_key = redis.call("lpop", KEYS[2] .. "keys")
+            local next_key = redis.call("zrange", KEYS[2] .. "keys", 0, 0)[1]
+            redis.call("zrem", KEYS[2] .. "keys", next_key)
             local next_val = redis.call("hget", KEYS[2], next_key)
-            -- lpop removed it from list, so also remove from hash
+            -- zrem removed it from list, so also remove from hash
             redis.call("hdel", KEYS[2], next_key)
             return {next_key, next_val}
         else
@@ -359,11 +361,13 @@ since the server is busy.
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of from_dict
-            local next_key = redis.call("lpop", KEYS[2] .. "keys")
+            local next_key = redis.call("zrange", KEYS[2] .. "keys", 0, 0)[1]
             
             if not next_key then
                 return {}
             end
+
+            redis.call("zrem", KEYS[2] .. "keys", next_key)
 
             local next_val = redis.call("hget", KEYS[2], next_key)
             -- lpop removed it from list, so also remove from hash
@@ -371,7 +375,7 @@ since the server is busy.
 
             -- put it in to_dict
             redis.call("hset",  KEYS[3], next_key, next_val)
-            redis.call("rpush", KEYS[3] .. "keys", next_key)
+            redis.call("zadd", KEYS[3] .. "keys", 0, next_key)
 
             return {next_key, next_val}
         else
@@ -406,13 +410,14 @@ since the server is busy.
             local count = 0
             for i = 2, #ARGV, 2  do
                 -- remove next item of from_dict
-                local next_key = redis.call("lpop", KEYS[2] .. "keys")
+                local next_key = redis.call("zrange", KEYS[2] .. "keys", 0, 0)[1]
+                redis.call("zrem", KEYS[2] .. "keys", next_key)
                 local next_val = redis.call("hget", KEYS[2], next_key)
                 -- lpop removed it from list, so also remove from hash
                 redis.call("hdel", KEYS[2], next_key)
                 -- put it in to_dict
                 redis.call("hset",  KEYS[3], ARGV[i], ARGV[i+1])
-                redis.call("rpush", KEYS[3] .. "keys", ARGV[i])
+                redis.call("zadd", KEYS[3] .. "keys", 0, ARGV[i])
                 count = count + 1
             end
             return count
@@ -466,10 +471,7 @@ since the server is busy.
         '''
         set value for key
         '''
-        dict_name = self._namespace(dict_name)
-        conn = redis.Redis(connection_pool=self.pool)
-        val = conn.hset(dict_name, self._encode(key), self._encode(value))
-
+        self.update(dict_name, {key: value})
 
     def direct_call(self, *args):
         '''execute a direct redis call against this Registry instances
