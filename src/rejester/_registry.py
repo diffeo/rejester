@@ -360,6 +360,11 @@ since the server is busy.
         then
             -- remove next item of from_dict
             local next_key = redis.call("lpop", KEYS[2] .. "keys")
+            
+            if not next_key then
+                return {}
+            end
+
             local next_val = redis.call("hget", KEYS[2], next_key)
             -- lpop removed it from list, so also remove from hash
             redis.call("hdel", KEYS[2], next_key)
@@ -379,9 +384,13 @@ since the server is busy.
                               self._namespace(from_dict), 
                               self._namespace(to_dict), 
                               self._session_lock_identifier)
-        if not key_value:
+
+        if key_value == []:
+            return None, None
+
+        if None in key_value:
             raise KeyError(
-                'Registry.pop_move failed to return an item from %s' % from_dict)
+                'Registry.popitem_move(%r, %r) --> %r' % (from_dict, to_dict, key_value))
 
         return self._decode(key_value[0]), self._decode(key_value[1])
 

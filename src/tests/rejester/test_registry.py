@@ -55,7 +55,7 @@ def test_registry_lock_loss(registry):
 def test_registry_update_pull(registry):
     test_dict = dict(cars=10, houses=5)
 
-    with registry.lock() as session:
+    with registry.lock(atime=5000) as session:
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
 
@@ -63,7 +63,7 @@ def test_registry_update_pull(registry):
 def test_registry_get(registry):
     test_dict = dict(cars=10, houses=5)
 
-    with registry.lock() as session:
+    with registry.lock(atime=5000) as session:
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
         assert session.get('test_dict', 'cars') == 10
@@ -73,7 +73,7 @@ def test_registry_get(registry):
 def test_registry_set(registry):
     test_dict = dict(cars=10, houses=5)
 
-    with registry.lock() as session:
+    with registry.lock(atime=5000) as session:
         session.set('test_dict', 'cars', 10)
         session.set('test_dict', 'houses', 5)
         assert session.pull('test_dict') == test_dict
@@ -82,7 +82,7 @@ def test_registry_set(registry):
 def test_registry_popmany(registry):
     test_dict = dict(cars=10, houses=5)
 
-    with registry.lock() as session:
+    with registry.lock(atime=5000) as session:
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
         session.popmany('test_dict', 'dogs', 'cars', 'houses')
@@ -93,7 +93,7 @@ def test_registry_popitem(registry):
     test_dict = dict(cars=10, houses=5)
 
     recovered = set()
-    with registry.lock() as session:
+    with registry.lock(atime=5000) as session:
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
         recovered.add(session.popitem('test_dict'))
@@ -105,7 +105,7 @@ def test_registry_popitem_move(registry):
     test_dict = dict(cars=10, houses=5)
 
     recovered = set()
-    with registry.lock() as session:
+    with registry.lock(atime=5000) as session:
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
 
@@ -120,11 +120,25 @@ def test_registry_popitem_move(registry):
         assert recovered == set(session.pull('second').items())
 
 
+def test_registry_popitem_move_empty(registry):
+    test_dict = dict(cars=10, houses=5)
+
+    recovered = set()
+    with registry.lock(atime=5000) as session:
+        session.update('test_dict', test_dict)
+        assert session.pull('test_dict') == test_dict
+
+        session.popitem_move('test_dict', 'second')
+        session.popitem_move('test_dict', 'second')
+        assert session.len('test_dict') == 0
+
+        assert session.popitem_move('test_dict', 'second') == (None, None)
+
 def test_registry_move(registry):
     test_dict = dict(cars=10, houses=5)
 
     recovered = set()
-    with registry.lock() as session:
+    with registry.lock(atime=5000) as session:
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
 
@@ -141,7 +155,7 @@ def test_registry_move(registry):
     
 def test_registry_increment(registry):
 
-    with registry.lock() as session:
+    with registry.lock(atime=5000) as session:
         session.increment('test_dict', 'foo', 4)
         assert session.pull('test_dict') == dict(foo=4)
         session.increment('test_dict', 'foo', 0.5)
