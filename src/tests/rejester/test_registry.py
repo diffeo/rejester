@@ -5,11 +5,13 @@ from __future__ import absolute_import
 import os
 import sys
 import yaml
+import time
 import pytest
 import rejester
 from rejester import Registry
 from rejester._logging import logger
-
+from rejester.exceptions import PriorityRangeEmpty
+from collections import defaultdict
 from tests.rejester.make_namespace_string import make_namespace_string
 
 @pytest.fixture(scope='function')
@@ -100,6 +102,24 @@ def test_registry_popitem(registry):
         recovered.add(session.popitem('test_dict'))
         assert recovered == set(test_dict.items())
 
+        with pytest.raises(PriorityRangeEmpty):
+            session.popitem('test_dict')
+
+
+def test_registry_popitem_priority(registry):
+    test_dict = dict(cars=10, houses=5, dogs=99)
+
+    recovered = set()
+    with registry.lock(atime=5000) as session:
+        session.update('test_dict', test_dict, priorities=defaultdict(lambda: 10))
+        assert session.pull('test_dict') == test_dict
+        with pytest.raises(PriorityRangeEmpty):
+            session.popitem('test_dict', priority_min=100)
+        recovered.add(session.popitem('test_dict', priority_min=-100))
+        recovered.add(session.popitem('test_dict', priority_min=10))
+        recovered.add(session.popitem('test_dict'))
+        assert recovered == set(test_dict.items())
+
 
 def test_registry_popitem_move(registry):
     test_dict = dict(cars=10, houses=5)
@@ -120,6 +140,22 @@ def test_registry_popitem_move(registry):
         assert recovered == set(session.pull('second').items())
 
 
+def test_registry_popitem_move_priority(registry):
+    test_dict = dict(cars=10, houses=5, dogs=99)
+
+    recovered = set()
+    with registry.lock(atime=5000) as session:
+        session.update('test_dict', test_dict, priorities=defaultdict(lambda: 10))
+        assert session.pull('test_dict') == test_dict
+        with pytest.raises(PriorityRangeEmpty):
+            session.popitem_move('test_dict','second',  priority_min=100)
+        recovered.add(session.popitem_move('test_dict', 'second', priority_min=-100))
+        recovered.add(session.popitem_move('test_dict', 'second', priority_min=10))
+        recovered.add(session.popitem_move('test_dict', 'second'))
+        assert recovered == set(test_dict.items())
+        assert recovered == set(session.pull('second').items())
+
+
 def test_registry_popitem_move_empty(registry):
     test_dict = dict(cars=10, houses=5)
 
@@ -132,7 +168,8 @@ def test_registry_popitem_move_empty(registry):
         session.popitem_move('test_dict', 'second')
         assert session.len('test_dict') == 0
 
-        assert session.popitem_move('test_dict', 'second') == (None, None)
+        with pytest.raises(PriorityRangeEmpty):
+            session.popitem_move('test_dict', 'second')
 
 def test_registry_move(registry):
     test_dict = dict(cars=10, houses=5)

@@ -17,9 +17,10 @@ import logging
 import contextlib
 from uuid import UUID
 from functools import wraps
+from collections import defaultdict
 
 from rejester._logging import logger
-from rejester.exceptions import EnvironmentError, LockError
+from rejester.exceptions import EnvironmentError, LockError, PriorityRangeEmpty
 
 class Registry(object):
     '''provides a centralized storage mechanism for dictionaries,
@@ -231,27 +232,28 @@ since the server is busy.
             logger.error('Fail to decode string %r', string, exc_info=True)
             raise TypeError
 
-    def update(self, dict_name, mapping):
-        '''
-        Add mapping to a dictionary, replacing previous values
+    def update(self, dict_name, mapping, priorities=None):
+        '''Add mapping to a dictionary, replacing previous values
+
+        :param priorities: a dict with the same keys as those in
+        mapping that provides a numerical value indicating the
+        priority to assign to that key.  Default sets 0 for all keys.
+
         '''
         if self._lock_name is None:
             raise ProgrammerError('must acquire lock first')
         ## script is evaluated with numkeys=2, so KEYS[1] is lock_name,
         ## KEYS[2] is dict_name, ARGV[1] is identifier, and ARGV[i>=2]
-        ## are keys and values arranged in pairs.
+        ## are keys, values, and priorities arranged in triples.
+        if priorities is None:
+            ## set all priorities to zero
+            priorities = defaultdict(int)
         script = '''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
-            for i = 2, #ARGV, 2  do
-                -- commenting out protection of existing values
-                --if redis.call("hget", KEYS[2], ARGV[i])
-                --    then
-                --        -- ERROR: dictionary already has key
-                --        return -1
-                --    end
+            for i = 2, #ARGV, 3  do
                 redis.call("hset",  KEYS[2], ARGV[i], ARGV[i+1])
-                redis.call("zadd",  KEYS[2] .. "keys", 0, ARGV[i])
+                redis.call("zadd",  KEYS[2] .. "keys", ARGV[i+2], ARGV[i])
             end
             return 1
         else
@@ -267,6 +269,8 @@ since the server is busy.
             items.append(key)
             value = self._encode(value)
             items.append(value)
+            priority = priorities[key]
+            items.append(priority)
 
         conn = redis.Redis(connection_pool=self.pool)
         res = conn.eval(script, 2, self._lock_name, dict_name, self._session_lock_identifier, *items)
@@ -316,7 +320,7 @@ since the server is busy.
         conn = redis.Redis(connection_pool=self.pool)
         return conn.hlen(dict_name)
 
-    def popitem(self, dict_name):
+    def popitem(self, dict_name, priority_min='-inf', priority_max='+inf'):
         '''
         D.popitem() -> (k, v), remove and return some (key, value) pair as a
         2-tuple; but raise KeyError if D is empty.
@@ -328,7 +332,12 @@ since the server is busy.
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of dict_name
-            local next_key = redis.call("zrange", KEYS[2] .. "keys", 0, 0)[1]
+            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")[1]
+
+            if not next_key then
+                return {}
+            end
+            
             redis.call("zrem", KEYS[2] .. "keys", next_key)
             local next_val = redis.call("hget", KEYS[2], next_key)
             -- zrem removed it from list, so also remove from hash
@@ -336,7 +345,7 @@ since the server is busy.
             return {next_key, next_val}
         else
             -- ERROR: No longer own the lock
-            return 0
+            return -1
         end
         '''
         dict_name = self._namespace(dict_name)
@@ -344,14 +353,19 @@ since the server is busy.
         logger.critical('popitem: %s %s %s' 
                         % (self._lock_name, self._session_lock_identifier, dict_name))
         key_value = conn.eval(script, 2, self._lock_name, dict_name, 
-                              self._session_lock_identifier)
-        if not key_value:
+                              self._session_lock_identifier,
+                              priority_min, priority_max,
+                              )
+        if key_value == -1:
             raise KeyError(
                 'Registry failed to return an item from %s' % dict_name)
 
+        if key_value == []:
+            raise PriorityRangeEmpty()
+
         return self._decode(key_value[0]), self._decode(key_value[1])
 
-    def popitem_move(self, from_dict, to_dict):
+    def popitem_move(self, from_dict, to_dict, priority_min='-inf', priority_max='+inf'):
         '''
         Pop an item out of from_dict, store it in to_dict, and return it
         '''
@@ -361,7 +375,7 @@ since the server is busy.
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of from_dict
-            local next_key = redis.call("zrange", KEYS[2] .. "keys", 0, 0)[1]
+            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")[1]
             
             if not next_key then
                 return {}
@@ -375,24 +389,26 @@ since the server is busy.
 
             -- put it in to_dict
             redis.call("hset",  KEYS[3], next_key, next_val)
-            redis.call("zadd", KEYS[3] .. "keys", 0, next_key)
+            redis.call("zadd", KEYS[3] .. "keys", next_priority, next_key)
 
             return {next_key, next_val}
         else
             -- ERROR: No longer own the lock
-            return 0
+            return -1
         end
         '''
         conn = redis.Redis(connection_pool=self.pool)
         key_value = conn.eval(script, 3, self._lock_name, 
                               self._namespace(from_dict), 
                               self._namespace(to_dict), 
-                              self._session_lock_identifier)
+                              self._session_lock_identifier,
+                              priority_min, priority_max,
+                              )
 
         if key_value == []:
-            return None, None
+            raise PriorityRangeEmpty()
 
-        if None in key_value:
+        if None in key_value or key_value == -1:
             raise KeyError(
                 'Registry.popitem_move(%r, %r) --> %r' % (from_dict, to_dict, key_value))
 
@@ -411,13 +427,14 @@ since the server is busy.
             for i = 2, #ARGV, 2  do
                 -- remove next item of from_dict
                 local next_key = redis.call("zrange", KEYS[2] .. "keys", 0, 0)[1]
+                local next_priority = redis.call("zscore", KEYS[2] .. "keys", next_key)
                 redis.call("zrem", KEYS[2] .. "keys", next_key)
                 local next_val = redis.call("hget", KEYS[2], next_key)
                 -- lpop removed it from list, so also remove from hash
                 redis.call("hdel", KEYS[2], next_key)
                 -- put it in to_dict
                 redis.call("hset",  KEYS[3], ARGV[i], ARGV[i+1])
-                redis.call("zadd", KEYS[3] .. "keys", 0, ARGV[i])
+                redis.call("zadd", KEYS[3] .. "keys", next_priority, ARGV[i])
                 count = count + 1
             end
             return count
