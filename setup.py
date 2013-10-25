@@ -11,12 +11,13 @@ from distutils.core import Command
 from setuptools import setup, find_packages
 
 from version import get_git_version
-VERSION = get_git_version()
+VERSION, SOURCE_LABEL = get_git_version()
 PROJECT = 'rejester'
 AUTHOR = 'Diffeo, Inc.'
 AUTHOR_EMAIL = 'support@diffeo.com'
 DESC = 'redis-based python client library and command line tools for managing tasks executed by a group of configurable workers'
 LICENSE = 'MIT/X11 license http://opensource.org/licenses/MIT',
+URL = 'http://github.com/diffeo/rejester'
 
 def read_file(file_name):
     file_path = os.path.join(
@@ -89,6 +90,7 @@ class PyTest(Command):
 setup(
     name=PROJECT,
     version=VERSION,
+    source_label=SOURCE_LABEL,
     description=DESC,
     license=LICENSE,
     long_description=read_file('README.md'),
