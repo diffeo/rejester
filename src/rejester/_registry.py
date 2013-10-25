@@ -20,7 +20,8 @@ from functools import wraps
 from collections import defaultdict
 
 from rejester._logging import logger
-from rejester.exceptions import EnvironmentError, LockError, PriorityRangeEmpty
+from rejester.exceptions import EnvironmentError, LockError, \
+    PriorityRangeEmpty, ProgrammerError
 
 class Registry(object):
     '''provides a centralized storage mechanism for dictionaries,
@@ -139,9 +140,19 @@ since the server is busy.
             sleep_time = random.uniform(0, 3)
             time.sleep(sleep_time)
 
-        logger.warn(
-            "failed to acquire lock %s for %f seconds" % (lock_name, atime))
+        logger.warn('failed to acquire lock %s for %f seconds', lock_name, atime)
         return False
+
+
+    def re_acquire_lock(self, ltime=600):
+        '''Re-acquire the lock'''
+        conn = redis.Redis(connection_pool=self.pool)
+        if conn.set(self._lock_name, self._session_lock_identifier, ex=ltime, xx=True):
+            logger.debug('re-acquired lock %s', self._lock_name)
+            return self._session_lock_identifier
+
+        raise EnvironmentError('failed to re-acquire lock')
+
 
     def _release_lock(self, lock_name, identifier):
         '''This follows a 'test and delete' pattern.  See redis documentation
@@ -186,7 +197,6 @@ since the server is busy.
             self._release_lock(lock_name, identifier)
             self._lock_name = None
             self._session_lock_identifier = None
-
 
     def _encode(self, data):
         '''Redis hash's store strings in the keys and values.  Since we want
@@ -265,12 +275,9 @@ since the server is busy.
         items = []
         ## This flattens the dictionary into a list
         for key, value in mapping.iteritems():
-            key = self._encode(key)
-            items.append(key)
-            value = self._encode(value)
-            items.append(value)
-            priority = priorities[key]
-            items.append(priority)
+            items.append(self._encode(key))
+            items.append(self._encode(value))
+            items.append(priorities[key])
 
         conn = redis.Redis(connection_pool=self.pool)
         res = conn.eval(script, 2, self._lock_name, dict_name, self._session_lock_identifier, *items)
