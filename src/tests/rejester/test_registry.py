@@ -54,6 +54,20 @@ def test_registry_lock_loss(registry):
     assert 'Lost lock' in str(env_error)
 
 
+def test_registry_re_acquire_lock(registry):
+    with pytest.raises(rejester.exceptions.EnvironmentError) as env_error:
+        with registry.lock(ltime=1000) as session:
+            ## lower the ltime
+            assert session.re_acquire_lock(ltime=1)
+            ## capture it with atime so short it couldn't happen if
+            ## ltime were not reset
+            with registry.lock(atime=10) as session2:
+                assert session2
+            ## verify that re_acquire_lock fails
+            with pytest.raises(EnvironmentError):
+                session.re_acquire_lock()        
+
+
 def test_registry_update_pull(registry):
     test_dict = dict(cars=10, houses=5)
 
@@ -222,3 +236,5 @@ def test_registry_increment(registry):
         assert session.pull('test_dict') == dict(foo=4)
         session.increment('test_dict', 'foo', 0.5)
         assert session.pull('test_dict') == dict(foo=4.5)
+
+
