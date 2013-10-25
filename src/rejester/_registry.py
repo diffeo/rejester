@@ -320,6 +320,56 @@ since the server is busy.
         conn = redis.Redis(connection_pool=self.pool)
         return conn.hlen(dict_name)
 
+    def getitem_reset(
+            self, dict_name, priority_min='-inf', priority_max='+inf',
+            new_priority=0,
+        ):
+        '''D.getitem_reset() -> (key, value), return some pair that has a
+        priority that satisfies the priority_min/max constraint; but
+        raise PriorityRangeEmpty if that range is empty.
+
+        (key, value) stays in the dictionary and is assigned new_priority
+        '''
+        if self._lock_name is None:
+            raise ProgrammerError('must acquire lock first')
+        ## see comment above for script in update
+        script = '''
+        if redis.call("get", KEYS[1]) == ARGV[1]
+        then
+            -- remove next item of dict_name
+            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")[1]
+
+            if not next_key then
+                return {}
+            end
+
+            local next_val = redis.call("hget", KEYS[2], next_key)
+            redis.call("zadd", KEYS[2] .. "keys", ARGV[4], next_key)
+
+            return {next_key, next_val}
+        else
+            -- ERROR: No longer own the lock
+            return -1
+        end
+        '''
+        dict_name = self._namespace(dict_name)
+        conn = redis.Redis(connection_pool=self.pool)
+        logger.debug('getitem_reset: %s %s %s',
+                     self._lock_name, self._session_lock_identifier, dict_name)
+        key_value = conn.eval(script, 2, self._lock_name, dict_name, 
+                              self._session_lock_identifier,
+                              priority_min, priority_max,
+                              new_priority,
+                              )
+        if key_value == -1:
+            raise KeyError(
+                'Registry failed to return an item from %s' % dict_name)
+
+        if key_value == []:
+            raise PriorityRangeEmpty()
+
+        return self._decode(key_value[0]), self._decode(key_value[1])
+
     def popitem(self, dict_name, priority_min='-inf', priority_max='+inf'):
         '''
         D.popitem() -> (k, v), remove and return some (key, value) pair as a
