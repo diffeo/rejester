@@ -34,7 +34,7 @@ def test_task_master_manage_workers(task_master):
 
     task_master.update_bundle(work_spec, work_units)
 
-    task_master.set_mode(work_spec['name'], task_master.RUN_FOREVER)
+    task_master.set_mode(work_spec['name'], task_master.RUN)
 
     workers = multiprocessing.Pool(num_workers, maxtasksperchild=1)
     for x in range(num_workers):
@@ -49,17 +49,17 @@ def test_task_master_manage_workers(task_master):
     finished_cleanly = False
     while time.time() - start < max_test_time:
 
-        for mode in [task_master.TERMINATE, task_master.IDLE, task_master.RUN_FOREVER]:
+        for mode in [task_master.TERMINATE, task_master.IDLE, task_master.RUN]:
             modes[mode] = task_master.registry.pull('observed_modes_' + mode)
             assert all([isinstance(c, (int, float)) for c in modes[mode].values()])
 
         logger.critical({s: num_seen(s, modes) for s in modes})
 
-        if num_seen(task_master.RUN_FOREVER, modes) == num_workers:
+        if num_seen(task_master.RUN, modes) == num_workers:
             task_master.idle_all_workers(work_spec['name'])
 
         if num_seen(task_master.IDLE, modes) == num_workers:
-            assert num_seen(task_master.RUN_FOREVER, modes) == num_workers
+            assert num_seen(task_master.RUN, modes) == num_workers
             logger.critical('setting mode to TERMINATE')
             task_master.set_mode(work_spec['name'], task_master.TERMINATE)
         

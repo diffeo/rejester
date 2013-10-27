@@ -28,7 +28,7 @@ def worker(config, work_spec_name):
             if mode == task_master.TERMINATE:
                 break
 
-            if mode == task_master.RUN_FOREVER:
+            if mode == task_master.RUN:
                 if not work_unit:
                     work_unit = task_master.get_work(work_spec_name)
                 work_unit.update()

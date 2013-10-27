@@ -82,13 +82,13 @@ class TaskMaster(object):
         with self.registry.lock() as session:
             session.popmany('workers', self.worker_id)
 
-    RUN_FOREVER = 'RUN_FOREVER'
+    RUN = 'RUN'
     IDLE = 'IDLE'
     TERMINATE = 'TERMINATE'
 
     def set_mode(self, work_spec_name, mode):
-        'set the mode to TERMINATE, RUN_FOREVER, or IDLE'
-        if not mode in [self.TERMINATE, self.RUN_FOREVER, self.IDLE]:
+        'set the mode to TERMINATE, RUN, or IDLE'
+        if not mode in [self.TERMINATE, self.RUN, self.IDLE]:
             raise ProgrammerError('mode=%r is not recognized' % mode)
         with self.registry.lock() as session:
             session.set('modes', work_spec_name, mode)
