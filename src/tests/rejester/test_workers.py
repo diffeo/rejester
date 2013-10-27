@@ -4,11 +4,15 @@ This software is released under an MIT/X11 open source license.
 Copyright 2012-2013 Diffeo, Inc.
 '''
 import os
+import copy
 import time
+import rejester
 import multiprocessing
 from rejester.workers import run_worker, Worker
 from rejester._logging import logger
-from test_task_master import task_master  ## a fixture that cleans up
+
+from tests.rejester.test_task_master import task_master  ## a fixture that cleans up
+from tests.rejester.make_namespace_string import make_namespace_string
 
 def num_seen(target_state, states):
     '''helper function that counts how many workers have seen
@@ -16,7 +20,22 @@ def num_seen(target_state, states):
     '''
     return sum([c > 0 for c in states[target_state].values()])
 
-#def work_program(config):
+
+def work_program(work_unit):
+    logger.critical('executing work_unit')
+
+    ## just to show that this works, we get the config from the data
+    ## and *reconnect* to the registry with a second instances instead
+    ## of using work_unit.registry
+    config = work_unit.data['config']
+    task_master = rejester.TaskMaster(config)
+    mode = task_master.get_mode()
+
+    #config2 = copy.deepcopy(config)
+    #config2['namespace'] = config['second_namespace']
+    #registry = rejester.Registry(config2)
+    
+    task_master.registry.increment('observed_modes_' + mode, str(os.getpid()))
     
 
 def test_task_master_manage_workers(task_master):
@@ -26,11 +45,14 @@ def test_task_master_manage_workers(task_master):
         desc = 'a test work bundle',
         min_gb = 8,
         config = dict(many=' ' * 2**10, params=''),
+        module = 'tests.rejester.test_workers',
+        exec_function = 'work_program',
+        shutdown_function = 'work_program',
     )
 
     num_units = 10
     num_workers = 10
-    work_units = {str(x): {str(x): ' ' * 30} for x in xrange(num_units)}
+    work_units = {str(x): dict(config=task_master.registry.config) for x in xrange(num_units)}
 
     task_master.update_bundle(work_spec, work_units)
 

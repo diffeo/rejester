@@ -28,6 +28,29 @@ class WorkUnit(object):
         self.key = key
         self.data = data
         self._finished = False
+        self.spec = self.registry.get(WORK_SPECS, self.work_spec_name)
+        self.module = __import__(
+            self.spec['module'], globals(), (), 
+            [self.spec['exec_function'], self.spec['shutdown_function']], -1)
+
+
+    def execute(self):
+        '''execute this WorkUnit using the function specified in its work_spec
+        '''
+        exec_function = getattr(self.module, self.spec['exec_function'])
+        ret_val = exec_function(self)
+        self.update()
+        return ret_val
+
+
+    def shutdown(self):
+        '''shutdown this WorkUnit using the function specified in its work_spec
+        '''
+        shutdown_function = getattr(self.module, self.spec['shutdown_function'])
+        ret_val = shutdown_function(self)
+        self.update(lease_time=-10)
+        return ret_val
+
 
     def update(self, lease_time=300):
         '''reset the task lease by incrementing lease_time.  Default is to put

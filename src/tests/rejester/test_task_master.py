@@ -29,9 +29,17 @@ def task_master(request):
 
     config['namespace'] = make_namespace_string()
 
+    ## provide a second namespace that will get cleaned up -- used by
+    ## tests that run a test worker program
+    config['second_namespace'] = config['namespace'] + '_second'
+
     def fin():
         task_master = TaskMaster(config)
         task_master.registry.delete_namespace()
+        config['namespace'] = config['second_namespace']
+        task_master = TaskMaster(config)
+        task_master.registry.delete_namespace()
+        
     request.addfinalizer(fin)
 
     task_master = TaskMaster(config)
@@ -46,6 +54,9 @@ def test_task_master_basic_interface(task_master):
         desc = 'a test work bundle',
         min_gb = 8,
         config = dict(many='', params=''),
+        module = 'tests.rejester.test_workers',
+        exec_function = 'work_program',
+        shutdown_function = 'work_program',
     )
 
     work_units = dict(foo={}, bar={})
@@ -79,6 +90,9 @@ def test_task_master_reset_all(task_master):
         desc = 'a test work bundle',
         min_gb = 8,
         config = dict(many='', params=''),
+        module = 'tests.rejester.test_workers',
+        exec_function = 'work_program',
+        shutdown_function = 'work_program',
     )
 
     work_units = dict(foo={}, bar={})
@@ -124,6 +138,9 @@ def test_task_master_throughput(task_master):
         desc = 'a test work bundle',
         min_gb = 8,
         config = dict(many=' ' * 2**10, params=''),
+        module = 'tests.rejester.test_workers',
+        exec_function = 'work_program',
+        shutdown_function = 'work_program',
     )
 
     num_units = 10**6

@@ -35,13 +35,12 @@ class Worker(object):
             mode = self.task_master.get_mode()
             logger.critical('worker observed mode=%r', mode)
             
-            self.task_master.registry.increment(
-                'observed_modes_' + mode, str(os.getpid()))
+            #self.task_master.registry.increment(
+            #    'observed_modes_' + mode, str(os.getpid()))
 
             if mode in [self.task_master.IDLE, self.task_master.TERMINATE]:
                 if self.work_unit:
-                    self.work_unit.update(lease_time=-10)
-                    self.work_unit = None
+                    self.work_unit.shutdown()
 
             if mode == self.task_master.TERMINATE:
                 break
@@ -50,7 +49,7 @@ class Worker(object):
                 if not self.work_unit:
                     self.work_unit = self.task_master.get_work(
                         available_gb=self.available_gb)
-                self.work_unit.update()
+                if self.work_unit:
+                    self.work_unit.execute()
 
             time.sleep(1)
-
