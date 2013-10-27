@@ -35,7 +35,8 @@ class WorkUnit(object):
 
 
     def execute(self):
-        '''execute this WorkUnit using the function specified in its work_spec
+        '''execute this WorkUnit using the function specified in its
+        work_spec.  Is called multiple times.
         '''
         exec_function = getattr(self.module, self.spec['exec_function'])
         ret_val = exec_function(self)
@@ -44,11 +45,13 @@ class WorkUnit(object):
 
 
     def shutdown(self):
-        '''shutdown this WorkUnit using the function specified in its work_spec
+        '''shutdown this WorkUnit using the function specified in its
+        work_spec.  Is called multiple times.
         '''
         shutdown_function = getattr(self.module, self.spec['shutdown_function'])
         ret_val = shutdown_function(self)
         self.update(lease_time=-10)
+        logger.critical('called shutdown')
         return ret_val
 
 
@@ -131,7 +134,7 @@ class TaskMaster(object):
                 num_pending[work_spec_name] = self.num_pending(work_spec_name)
             if sum(num_pending.values()) == 0:
                 break
-            logger.warn('waiting for %r', num_pending)
+            logger.warn('waiting for pending work_units: %r', num_pending)
             time.sleep(1)
 
 

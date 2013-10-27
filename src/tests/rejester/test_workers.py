@@ -8,7 +8,7 @@ import copy
 import time
 import rejester
 import multiprocessing
-from rejester.workers import run_worker, Worker
+from rejester.workers import run_worker, BlockingWorker, GreenletWorker
 from rejester._logging import logger
 
 from tests.rejester.test_task_master import task_master  ## a fixture that cleans up
@@ -63,7 +63,7 @@ def test_task_master_manage_workers(task_master):
     for x in range(num_workers):
         results.append(
             workers.apply_async(
-                run_worker, (Worker, task_master.registry.config, 9)))
+                run_worker, (GreenletWorker, task_master.registry.config, 9)))
         ## "9" is the available_gb hard coded for this test
     workers.close()
     
