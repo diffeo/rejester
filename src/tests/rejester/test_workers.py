@@ -6,7 +6,7 @@ Copyright 2012-2013 Diffeo, Inc.
 import os
 import time
 import multiprocessing
-from rejester import worker
+from rejester.workers import run_worker, Worker
 from rejester._logging import logger
 from test_task_master import task_master  ## a fixture that cleans up
 
@@ -37,10 +37,12 @@ def test_task_master_manage_workers(task_master):
     task_master.set_mode(task_master.RUN)
 
     workers = multiprocessing.Pool(num_workers, maxtasksperchild=1)
+    results = []
     for x in range(num_workers):
-        workers.apply_async(
-            worker, 
-            (task_master.registry.config, work_spec['name']))
+        results.append(
+            workers.apply_async(
+                run_worker, (Worker, task_master.registry.config, 9)))
+        ## "9" is the available_gb hard coded for this test
     workers.close()
     
     start = time.time()
@@ -48,6 +50,13 @@ def test_task_master_manage_workers(task_master):
     modes = dict()
     finished_cleanly = False
     while time.time() - start < max_test_time:
+
+        for res in results:
+            try:
+                ## raises exceptions from children processes
+                res.get(0)
+            except multiprocessing.TimeoutError:
+                pass
 
         for mode in [task_master.TERMINATE, task_master.IDLE, task_master.RUN]:
             modes[mode] = task_master.registry.pull('observed_modes_' + mode)

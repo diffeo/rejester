@@ -30,7 +30,9 @@ class WorkUnit(object):
         self._finished = False
 
     def update(self, lease_time=300):
-        '''refresh the task lease by incrementing lease_time ahead of now
+        '''reset the task lease by incrementing lease_time.  Default is to put
+        it five minutes ahead of now.  Setting lease_time<0 will drop
+        the lease.
         '''
         if self._finished:
             raise ProgrammerError('cannot update after finishing at task')
@@ -186,7 +188,7 @@ class TaskMaster(object):
 
         :param lease_time: how many seconds to lease a WorkUnit
         '''
-        if not available_gb:
+        if not isinstance(available_gb, (int, float)):
             raise ProgrammerError('must always specify available_gb')
 
         with self.registry.lock(atime=1000) as session:
