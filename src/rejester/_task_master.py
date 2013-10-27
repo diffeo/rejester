@@ -5,6 +5,7 @@ This software is released under an MIT/X11 open source license.
 
 Copyright 2012-2013 Diffeo, Inc.
 '''
+import uuid
 import time
 import logging
 from operator import itemgetter
@@ -67,6 +68,46 @@ class TaskMaster(object):
         config['app_name'] = 'rejester'
         self.registry = Registry(config)
 
+    def register_worker(self):
+        '''record the availability of this worker and get a unique identifer
+        '''
+        self.worker_id = uuid.uuid4()
+        with self.registry.lock() as session:
+            session.update('workers', {self.worker_id: ('host_info',)})
+        return self.worker_id
+
+    def unregister_worker(self):
+        '''remove this worker from the list of available workers
+        ''' 
+        with self.registry.lock() as session:
+            session.popmany('workers', self.worker_id)
+
+    RUN_FOREVER = 'RUN_FOREVER'
+    IDLE = 'IDLE'
+    TERMINATE = 'TERMINATE'
+
+    def set_mode(self, work_spec_name, mode):
+        'set the mode to TERMINATE, RUN_FOREVER, or IDLE'
+        if not mode in [self.TERMINATE, self.RUN_FOREVER, self.IDLE]:
+            raise ProgrammerError('mode=%r is not recognized' % mode)
+        with self.registry.lock() as session:
+            session.set('modes', work_spec_name, mode)
+
+    def get_mode(self, work_spec_name):
+        'returns mode'
+        with self.registry.lock() as session:
+            return session.get('modes', work_spec_name)
+
+    def idle_all_workers(self, work_spec_name):
+        self.set_mode(work_spec_name, self.IDLE)
+        while 1:
+            num_pending = self.num_pending(work_spec_name)
+            if num_pending == 0:
+                break
+            logger.warn('waiting for %d tasks in pending', num_pending)
+            time.sleep(1)
+
+
     @classmethod
     def validate_work_spec(cls, work_spec):
         'raise ProgrammerError if work_spec is invalid'
@@ -76,9 +117,44 @@ class TaskMaster(object):
                 not isinstance(work_spec['min_gb'], (float, int)):
             raise ProgrammerError('work_spec["min_gb"] must be a number')
 
+    def num_available(self, work_spec_name):
+        return self.registry.len(WORK_UNITS_ + work_spec_name, 
+                                 priority_max=time.time())
+
+    def num_pending(self, work_spec_name):
+        return self.registry.len(WORK_UNITS_ + work_spec_name, 
+                                 priority_min=time.time())
+
+    def num_finished(self, work_spec_name):
+        return self.registry.len(WORK_UNITS_ + work_spec_name + _FINISHED)
+
+    def num_tasks(self, work_spec_name):
+        return self.num_finished(work_spec_name) + \
+               self.registry.len(WORK_UNITS_ + work_spec_name)
+
+    def inspect_work_unit(self, work_spec_name, work_unit_key):
+        '''
+        returns work_unit.data
+        '''
+        with self.registry.lock(atime=1000) as session:
+            work_unit_data = session.get(
+                WORK_UNITS_ + work_spec_name, work_unit_key)
+            if not work_unit_data:
+                work_unit_data = session.get(
+                    WORK_UNITS_ + work_spec_name + _FINISHED, work_unit_key)
+            return work_unit_data
+
+
+    def reset_all(self, work_spec_name):
+        self.idle_all_workers(work_spec_name)
+        with self.registry.lock(ltime=10000) as session:
+            session.move_all(WORK_UNITS_ + work_spec_name,
+                             WORK_UNITS_ + work_spec_name + _FINISHED)
+            session.reset_priorities(WORK_UNITS_ + work_spec_name, 0)
+
     def update_bundle(self, work_spec, work_units, nice=0):
         '''
-
+        
         '''
         self.validate_work_spec(work_spec)
         work_spec_name = work_spec['name']

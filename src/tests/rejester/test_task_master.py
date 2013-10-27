@@ -67,8 +67,34 @@ def test_task_master_basic_interface(task_master):
     work_unit.finish()
 
     assert task_master.registry.pull(WORK_UNITS_ + work_spec['name'] + _FINISHED)[work_unit.key]['status'] == 10   
-    
 
+    assert 'status' in task_master.inspect_work_unit(work_spec['name'], work_unit.key)
+
+def test_task_master_reset_all(task_master):
+    '''
+    '''
+    work_spec = dict(
+        name = 'tbundle',
+        desc = 'a test work bundle',
+        min_gb = 8,
+        config = dict(many='', params=''),
+    )
+
+    work_units = dict(foo={}, bar={})
+    task_master.update_bundle(work_spec, work_units)
+    work_unit = task_master.get_work(available_gb=13)
+    work_unit.data['status'] = 10
+    work_unit.update()
+    work_unit.finish()
+
+    task_master.reset_all(work_spec['name'])
+
+    assert len(task_master.registry.pull(WORK_UNITS_ + work_spec['name'])) == 2
+    with pytest.raises(PriorityRangeEmpty):
+        task_master.registry.popitem(WORK_UNITS_ + work_spec['name'], priority_max=-1)
+
+    
+@pytest.mark.performance
 def test_task_master_throughput(task_master):
     '''
     '''
@@ -94,3 +120,9 @@ def test_task_master_throughput(task_master):
     work_unit = task_master.get_work(available_gb=13)
     assert work_unit.key in work_units
 
+
+def test_task_master_register(task_master):
+    worker_id = task_master.register_worker()
+    assert worker_id in task_master.registry.pull('workers')
+    task_master.unregister_worker()
+    assert not task_master.registry.pull('workers')
