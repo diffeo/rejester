@@ -12,6 +12,7 @@ import rejester
 from rejester import TaskMaster
 from rejester._logging import logger
 from rejester._task_master import WORK_UNITS_, _FINISHED
+from rejester.exceptions import PriorityRangeEmpty
 
 from tests.rejester.make_namespace_string import make_namespace_string
 
@@ -82,16 +83,35 @@ def test_task_master_reset_all(task_master):
 
     work_units = dict(foo={}, bar={})
     task_master.update_bundle(work_spec, work_units)
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_pending(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == 2
+
     work_unit = task_master.get_work(available_gb=13)
     work_unit.data['status'] = 10
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == 1
+    assert task_master.num_pending(work_spec['name']) == 1
+
     work_unit.update()
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == 1
+    assert task_master.num_pending(work_spec['name']) == 1
+
     work_unit.finish()
+    assert task_master.num_finished(work_spec['name']) == 1
+    assert task_master.num_available(work_spec['name']) == 1
+    assert task_master.num_pending(work_spec['name']) == 0
 
     task_master.reset_all(work_spec['name'])
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == 2
+    assert task_master.num_pending(work_spec['name']) == 0
 
     assert len(task_master.registry.pull(WORK_UNITS_ + work_spec['name'])) == 2
     with pytest.raises(PriorityRangeEmpty):
-        task_master.registry.popitem(WORK_UNITS_ + work_spec['name'], priority_max=-1)
+        with task_master.registry.lock() as session:
+            session.popitem(WORK_UNITS_ + work_spec['name'], priority_max=-1)
 
     
 @pytest.mark.performance

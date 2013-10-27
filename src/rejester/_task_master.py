@@ -86,25 +86,27 @@ class TaskMaster(object):
     IDLE = 'IDLE'
     TERMINATE = 'TERMINATE'
 
-    def set_mode(self, work_spec_name, mode):
+    def set_mode(self, mode):
         'set the mode to TERMINATE, RUN, or IDLE'
         if not mode in [self.TERMINATE, self.RUN, self.IDLE]:
             raise ProgrammerError('mode=%r is not recognized' % mode)
         with self.registry.lock() as session:
-            session.set('modes', work_spec_name, mode)
+            session.set('modes', 'mode', mode)
 
-    def get_mode(self, work_spec_name):
+    def get_mode(self):
         'returns mode, defaults to IDLE'
         with self.registry.lock() as session:
-            return session.get('modes', work_spec_name) or self.IDLE
+            return session.get('modes', 'mode') or self.IDLE
 
-    def idle_all_workers(self, work_spec_name):
-        self.set_mode(work_spec_name, self.IDLE)
+    def idle_all_workers(self):
+        self.set_mode(self.IDLE)
         while 1:
-            num_pending = self.num_pending(work_spec_name)
-            if num_pending == 0:
+            num_pending = dict()
+            for work_spec_name in self.registry.pull(NICE_LEVELS).keys():
+                num_pending[work_spec_name] = self.num_pending(work_spec_name)
+            if sum(num_pending.values()) == 0:
                 break
-            logger.warn('waiting for %d tasks in pending', num_pending)
+            logger.warn('waiting for %r', num_pending)
             time.sleep(1)
 
 
@@ -146,10 +148,10 @@ class TaskMaster(object):
 
 
     def reset_all(self, work_spec_name):
-        self.idle_all_workers(work_spec_name)
+        self.idle_all_workers()
         with self.registry.lock(ltime=10000) as session:
-            session.move_all(WORK_UNITS_ + work_spec_name,
-                             WORK_UNITS_ + work_spec_name + _FINISHED)
+            session.move_all(WORK_UNITS_ + work_spec_name + _FINISHED,
+                             WORK_UNITS_ + work_spec_name)
             session.reset_priorities(WORK_UNITS_ + work_spec_name, 0)
 
     def update_bundle(self, work_spec, work_units, nice=0):
