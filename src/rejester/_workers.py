@@ -15,7 +15,7 @@ def worker(config, work_spec_name):
         task_master = TaskMaster(config)
         work_unit = None
         while 1:
-            mode = task_master.get_mode(work_spec_name)
+            mode = task_master.get_mode()
             logger.critical('worker observed mode=%r', mode)
             
             task_master.registry.increment('observed_modes_' + mode, str(os.getpid()))
