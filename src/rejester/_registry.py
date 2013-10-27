@@ -287,6 +287,36 @@ since the server is busy.
                 'Unable to add items to %s in registry' % dict_name)
 
 
+    def reset_priorities(self, dict_name, priority):
+        '''set all priorities in dict_name to priority
+
+        :type priority: float or int
+        '''
+        if self._lock_name is None:
+            raise ProgrammerError('must acquire lock first')
+        ## see comment above for script in update
+        script = '''
+        if redis.call("get", KEYS[1]) == ARGV[1]
+        then
+            local keys = redis.call('ZRANGE', KEYS[2] .. "keys", 0, -1)
+            for i, next_key in ipairs(keys) do
+                redis.call("zadd",  KEYS[2] .. "keys", ARGV[2], next_key)
+            end
+            return 1
+        else
+            -- ERROR: No longer own the lock
+            return 0
+        end
+        '''
+        dict_name = self._namespace(dict_name)
+        conn = redis.Redis(connection_pool=self.pool)
+        res = conn.eval(script, 2, self._lock_name, dict_name, self._session_lock_identifier, priority)
+        if not res:
+            # We either lost the lock or something else went wrong
+            raise EnvironmentError(
+                'Unable to add items to %s in registry' % dict_name)
+
+
     def popmany(self, dict_name, *keys):
         '''
         map(D.pop, keys), remove specified keys
@@ -321,11 +351,13 @@ since the server is busy.
                 'Unable to remove items from %s in registry: %r' 
                 % (dict_name, res))
 
-    def len(self, dict_name):
-        'Length of dictionary'
+    def len(self, dict_name, priority_min='-inf', priority_max='+inf'):
+        '''returns number of items in dict_name within
+        [priority_min, priority_max]
+        '''
         dict_name = self._namespace(dict_name)
         conn = redis.Redis(connection_pool=self.pool)
-        return conn.hlen(dict_name)
+        return conn.zcount(dict_name + 'keys', priority_min, priority_max)
 
     def getitem_reset(
             self, dict_name, priority_min='-inf', priority_max='+inf',
@@ -432,7 +464,9 @@ since the server is busy.
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of from_dict
-            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")[1]
+            local next_items = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")
+            local next_key = next_items[1]
+            local next_priority = next_items[2]
             
             if not next_key then
                 return {}
@@ -441,14 +475,14 @@ since the server is busy.
             redis.call("zrem", KEYS[2] .. "keys", next_key)
 
             local next_val = redis.call("hget", KEYS[2], next_key)
-            -- lpop removed it from list, so also remove from hash
+            -- zrem removed it from list, so also remove from hash
             redis.call("hdel", KEYS[2], next_key)
 
             -- put it in to_dict
-            redis.call("hset",  KEYS[3], next_key, next_val)
+            redis.call("hset", KEYS[3], next_key, next_val)
             redis.call("zadd", KEYS[3] .. "keys", next_priority, next_key)
 
-            return {next_key, next_val}
+            return {next_key, next_val, next_priority}
         else
             -- ERROR: No longer own the lock
             return -1
@@ -469,6 +503,7 @@ since the server is busy.
             raise KeyError(
                 'Registry.popitem_move(%r, %r) --> %r' % (from_dict, to_dict, key_value))
 
+        logger.debug('Registry.popitem_move(%r, %r) --> %r', from_dict, to_dict, key_value)
         return self._decode(key_value[0]), self._decode(key_value[1])
 
     def move(self, from_dict, to_dict, mapping):
@@ -487,7 +522,7 @@ since the server is busy.
                 local next_priority = redis.call("zscore", KEYS[2] .. "keys", next_key)
                 redis.call("zrem", KEYS[2] .. "keys", next_key)
                 local next_val = redis.call("hget", KEYS[2], next_key)
-                -- lpop removed it from list, so also remove from hash
+                -- zrem removed it from Sorted Set, so also remove from hash
                 redis.call("hdel", KEYS[2], next_key)
                 -- put it in to_dict
                 redis.call("hset",  KEYS[3], ARGV[i], ARGV[i+1])
@@ -518,6 +553,45 @@ since the server is busy.
             raise EnvironmentError(
                 'Registry failed to move all: num_moved = %d != %d len(items)'
                 % (num_moved, len(items)))
+
+
+    def move_all(self, from_dict, to_dict):
+        '''
+        move all items out of from_dict and update them in to_dict
+        '''
+        if self._lock_name is None:
+            raise ProgrammerError('must acquire lock first')
+        script = '''
+        if redis.call("get", KEYS[1]) == ARGV[1]
+        then
+            local count = 0
+            local keys = redis.call('ZRANGE', KEYS[2] .. "keys", 0, -1)
+            for i, next_key in ipairs(keys) do
+                -- get the value and priority for this key
+                local next_val = redis.call("hget", KEYS[2], next_key)
+                local next_priority = redis.call("zscore", KEYS[2] .. "keys", next_key)
+                -- remove item of from_dict
+                redis.call("zrem", KEYS[2] .. "keys", next_key)
+                -- also remove from hash
+                redis.call("hdel", KEYS[2], next_key)
+                -- put it in to_dict
+                redis.call("hset",  KEYS[3], next_key, next_val)
+                redis.call("zadd", KEYS[3] .. "keys", next_priority, next_key)
+                count = count + 1
+            end
+            return count
+        else
+            -- ERROR: No longer own the lock
+            return 0
+        end
+        '''
+        conn = redis.Redis(connection_pool=self.pool)
+
+        num_moved = conn.eval(script, 3, self._lock_name, 
+                              self._namespace(from_dict), 
+                              self._namespace(to_dict), 
+                              self._session_lock_identifier)
+        return num_moved
 
 
     def pull(self, dict_name):
