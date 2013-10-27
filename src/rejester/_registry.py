@@ -507,8 +507,8 @@ since the server is busy.
         return self._decode(key_value[0]), self._decode(key_value[1])
 
     def move(self, from_dict, to_dict, mapping):
-        '''
-        Pop mapping out of from_dict, and update them in to_dict
+        '''Pop mapping's keys out of from_dict, and update them in to_dict
+        with the new values provided by mapping
         '''
         if self._lock_name is None:
             raise ProgrammerError('must acquire lock first')
@@ -518,12 +518,11 @@ since the server is busy.
             local count = 0
             for i = 2, #ARGV, 2  do
                 -- remove next item of from_dict
-                local next_key = redis.call("zrange", KEYS[2] .. "keys", 0, 0)[1]
-                local next_priority = redis.call("zscore", KEYS[2] .. "keys", next_key)
-                redis.call("zrem", KEYS[2] .. "keys", next_key)
-                local next_val = redis.call("hget", KEYS[2], next_key)
+                local next_priority = redis.call("zscore", KEYS[2] .. "keys", ARGV[i])
+                redis.call("zrem", KEYS[2] .. "keys", ARGV[i])
+                -- drop the old value: local next_val = redis.call("hget", KEYS[2], ARGV[i])
                 -- zrem removed it from Sorted Set, so also remove from hash
-                redis.call("hdel", KEYS[2], next_key)
+                redis.call("hdel", KEYS[2], ARGV[i])
                 -- put it in to_dict
                 redis.call("hset",  KEYS[3], ARGV[i], ARGV[i+1])
                 redis.call("zadd", KEYS[3] .. "keys", next_priority, ARGV[i])

@@ -202,22 +202,23 @@ def test_registry_popitem_move_empty(registry):
             session.popitem_move('test_dict', 'second')
 
 def test_registry_move(registry):
-    test_dict = dict(cars=10, houses=5)
+    test_dict = dict(cars=10, houses=5, dogs=4)
 
     recovered = set()
     with registry.lock(atime=5000) as session:
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
 
-        assert session.len('test_dict') == 2
+        assert session.len('test_dict') == 3
         session.move('test_dict', 'second', dict(cars=3))
-        assert session.len('test_dict') == 1
+        assert session.len('test_dict') == 2
         assert session.len('second') == 1
         session.move('test_dict', 'second', dict(houses=2))
-        assert session.len('test_dict') == 0
+        assert session.len('test_dict') == 1
         assert session.len('second') == 2
 
         assert dict(cars=3, houses=2) == session.pull('second')
+        assert dict(dogs=4) == session.pull('test_dict')
 
 def test_registry_getitem_reset_priorities(registry):
     test_dict = dict(cars=10, houses=5)
