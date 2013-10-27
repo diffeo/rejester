@@ -8,3 +8,4 @@ Copyright 2012-2013 Diffeo, Inc.
 
 from _task_master import TaskMaster
 from _registry import Registry
+from _workers import worker

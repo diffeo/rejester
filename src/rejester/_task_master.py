@@ -94,9 +94,9 @@ class TaskMaster(object):
             session.set('modes', work_spec_name, mode)
 
     def get_mode(self, work_spec_name):
-        'returns mode'
+        'returns mode, defaults to IDLE'
         with self.registry.lock() as session:
-            return session.get('modes', work_spec_name)
+            return session.get('modes', work_spec_name) or self.IDLE
 
     def idle_all_workers(self, work_spec_name):
         self.set_mode(work_spec_name, self.IDLE)
