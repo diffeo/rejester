@@ -62,8 +62,10 @@ def test_task_master_manage_workers(task_master):
     results = []
     for x in range(num_workers):
         results.append(
+            ## could use GreenletWorker here, just slower.  Both risk
+            ## being blocked by a non-cooperative work_program...
             workers.apply_async(
-                run_worker, (GreenletWorker, task_master.registry.config, 9)))
+                run_worker, (BlockingWorker, task_master.registry.config, 9)))
         ## "9" is the available_gb hard coded for this test
     workers.close()
     
