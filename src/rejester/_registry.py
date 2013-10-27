@@ -642,14 +642,18 @@ since the server is busy.
         return func(key, *args)
 
 
-    def increment(self, dict_name, key, value=1):
+    def increment(self, dict_name, key, value=1.0):
         '''
         increment the value stored at dict_name(key) by value
         '''
         conn = redis.Redis(connection_pool=self.pool)
         if isinstance(value, int):
-            conn.hincrby(self._namespace(dict_name), self._encode(key), value)
-        elif isinstance(value, float):
+            value = float(value)
+            ## while redis will allow you to go from int to float, you
+            ## cannot go back to using hincrby if a hash has floats in
+            ## it.
+            #conn.hincrby(self._namespace(dict_name), self._encode(key), value)
+        if isinstance(value, float):
             conn.hincrbyfloat(self._namespace(dict_name), self._encode(key), value)
         else:
             raise TypeError('%r is not int or float' % value)
