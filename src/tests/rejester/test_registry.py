@@ -75,7 +75,7 @@ def test_registry_update_pull(registry):
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
 
-@pytest.mark.xfail #... because expire is not working
+
 def test_registry_update_expire(registry):
     test_dict = dict(cars=10, houses=5)
 

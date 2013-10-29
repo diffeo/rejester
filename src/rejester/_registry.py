@@ -281,13 +281,9 @@ since the server is busy.
                 redis.call("hset",  KEYS[2], ARGV[i], ARGV[i+1])
                 redis.call("zadd",  KEYS[2] .. "keys", ARGV[i+2], ARGV[i])
             end
-            --redis.call("hset", KEYS[2], "j:'start'", "1")
-            if type(ARGV[2]) == "number" then
-                --redis.call("hset",   KEYS[2], "j:'expire'", "1")
+            if tonumber(ARGV[2]) ~= nil then
                 redis.call("expire", KEYS[2], ARGV[2])
                 redis.call("expire", KEYS[2] .. "keys", ARGV[2])
-            --else
-            --    redis.call("hset", KEYS[2], "j:'not-expire'", "1")
             end
             return 1
         else
