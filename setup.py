@@ -16,7 +16,7 @@ PROJECT = 'rejester'
 AUTHOR = 'Diffeo, Inc.'
 AUTHOR_EMAIL = 'support@diffeo.com'
 DESC = 'redis-based python client library and command line tools for managing tasks executed by a group of configurable workers'
-LICENSE = 'MIT/X11 license http://opensource.org/licenses/MIT',
+LICENSE = 'MIT/X11 license http://opensource.org/licenses/MIT'
 URL = 'http://github.com/diffeo/rejester'
 
 def read_file(file_name):
