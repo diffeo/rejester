@@ -232,7 +232,11 @@ since the server is busy.
         elif string[0] == 'u':
             return UUID(int=int(string[2:]))
         elif string[0] == 'j':
-            return json.loads(string[2:])
+            try:
+                return json.loads(string[2:])
+            except ValueError, exc:
+                logger.critical('%r --> tried to json.loads(%r)', string, string[2:], exc_info=True)
+                raise
         else:
             try:
                 return float(string)
@@ -242,12 +246,22 @@ since the server is busy.
             logger.error('Fail to decode string %r', string, exc_info=True)
             raise TypeError
 
-    def update(self, dict_name, mapping, priorities=None):
+    def update(self, dict_name, mapping=None, priorities=None, expire=None):
         '''Add mapping to a dictionary, replacing previous values
+
+        :param mapping: a dict of keys and values to update in
+        dict_name.  Must be specified if priorities is specified.
 
         :param priorities: a dict with the same keys as those in
         mapping that provides a numerical value indicating the
         priority to assign to that key.  Default sets 0 for all keys.
+
+        :param expire: if specified, then dict_name will be set to
+        expire in that many seconds.
+        :type expire: int
+
+        Can be called with only dict_name and expire to refresh the
+        expiration time.
 
         '''
         if self._lock_name is None:
@@ -258,12 +272,22 @@ since the server is busy.
         if priorities is None:
             ## set all priorities to zero
             priorities = defaultdict(int)
+        if not (expire is None or isinstance(expire, int)):
+            raise ProgrammerError('expire must be int or unspecified')
         script = '''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
-            for i = 2, #ARGV, 3  do
+            for i = 3, #ARGV, 3  do
                 redis.call("hset",  KEYS[2], ARGV[i], ARGV[i+1])
                 redis.call("zadd",  KEYS[2] .. "keys", ARGV[i+2], ARGV[i])
+            end
+            --redis.call("hset", KEYS[2], "j:'start'", "1")
+            if type(ARGV[2]) == "number" then
+                --redis.call("hset",   KEYS[2], "j:'expire'", "1")
+                redis.call("expire", KEYS[2], ARGV[2])
+                redis.call("expire", KEYS[2] .. "keys", ARGV[2])
+            --else
+            --    redis.call("hset", KEYS[2], "j:'not-expire'", "1")
             end
             return 1
         else
@@ -272,6 +296,8 @@ since the server is busy.
         end
         '''
         dict_name = self._namespace(dict_name)
+        if mapping is None:
+            mapping = {}
         items = []
         ## This flattens the dictionary into a list
         for key, value in mapping.iteritems():
@@ -280,7 +306,9 @@ since the server is busy.
             items.append(priorities[key])
 
         conn = redis.Redis(connection_pool=self.pool)
-        res = conn.eval(script, 2, self._lock_name, dict_name, self._session_lock_identifier, *items)
+        res = conn.eval(script, 2, self._lock_name, dict_name, 
+                        self._session_lock_identifier, expire, 
+                        *items)
         if not res:
             # We either lost the lock or something else went wrong
             raise EnvironmentError(
