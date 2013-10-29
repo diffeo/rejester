@@ -28,6 +28,7 @@ class WorkUnit(object):
         self.key = key
         self.data = data
         self._finished = False
+        self._failed = False
         self.spec = self.registry.get(WORK_SPECS, self.work_spec_name)
         self.module = __import__(
             self.spec['module'], globals(), (), 
@@ -68,7 +69,10 @@ class WorkUnit(object):
                 {self.key: self.data}, 
                 {self.key: time.time() + lease_time})
 
+
     def finish(self):
+        '''move this WorkUnit to finished state
+        '''
         if self._finished:
             return
         with self.registry.lock() as session:
@@ -77,6 +81,22 @@ class WorkUnit(object):
                 WORK_UNITS_ + self.work_spec_name + _FINISHED,
                 {self.key: self.data})
         self._finished = True
+
+
+    def failed(self):
+        '''move this WorkUnit to failed state and record info about the
+        worker
+        '''
+        if self._failed:
+            return
+        self.data['worker_state'] = self.worker_state
+        with self.registry.lock() as session:
+            session.move(
+                WORK_UNITS_ + self.work_spec_name,
+                WORK_UNITS_ + self.work_spec_name + _FAILED,
+                {self.key: self.data})
+        self._failed = True
+
 
 class TaskMaster(object):
     '''
