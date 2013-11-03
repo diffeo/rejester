@@ -8,17 +8,18 @@ import copy
 import time
 import rejester
 import multiprocessing
-from rejester.workers import run_worker, BlockingWorker, GreenletWorker
+from rejester.workers import run_worker, BlockingWorker, GreenletWorker, MultiWorker
 from rejester._logging import logger
 
 from tests.rejester.test_task_master import task_master  ## a fixture that cleans up
-from tests.rejester.make_namespace_string import make_namespace_string
 
-def num_seen(target_state, states):
-    '''helper function that counts how many workers have seen
-    target_state at least once.  "states" is constructed below.
-    '''
-    return sum([c > 0 for c in states[target_state].values()])
+
+def test_task_register(task_master):
+    worker = BlockingWorker(task_master.registry.config, 10)
+    worker_id = worker.register()
+    assert worker_id in task_master.workers()
+    worker.unregister()
+    assert worker_id not in task_master.workers()
 
 
 def work_program(work_unit):
@@ -29,30 +30,34 @@ def work_program(work_unit):
     ## of using work_unit.registry
     config = work_unit.data['config']
     task_master = rejester.TaskMaster(config)
-    mode = task_master.get_mode()
+    time.sleep(3)
 
-    #config2 = copy.deepcopy(config)
-    #config2['namespace'] = config['second_namespace']
-    #registry = rejester.Registry(config2)
-    
-    task_master.registry.increment('observed_modes_' + mode, str(os.getpid()))
-    
+def work_program_broken(work_unit):
+    logger.critical('executing "broken" work_unit')
+
+    ## just to show that this works, we get the config from the data
+    ## and *reconnect* to the registry with a second instances instead
+    ## of using work_unit.registry
+    config = work_unit.data['config']
+    task_master = rejester.TaskMaster(config)
+    raise Exception('simulate broken work_unit')
+
+## 1KB sized work_spec config
+work_spec = dict(
+    name = 'tbundle',
+    desc = 'a test work bundle',
+    min_gb = 8,
+    config = dict(many=' ' * 2**10, params=''),
+    module = 'tests.rejester.test_workers',
+    run_function = 'work_program',
+    terminate_function = 'work_program',
+)
 
 def test_task_master_manage_workers(task_master):
-    ## 1KB sized work_spec config
-    work_spec = dict(
-        name = 'tbundle',
-        desc = 'a test work bundle',
-        min_gb = 8,
-        config = dict(many=' ' * 2**10, params=''),
-        module = 'tests.rejester.test_workers',
-        exec_function = 'work_program',
-        shutdown_function = 'work_program',
-    )
-
     num_units = 10
     num_workers = 10
-    work_units = {str(x): dict(config=task_master.registry.config) for x in xrange(num_units)}
+    work_units = {str(x): dict(config=task_master.registry.config) 
+                  for x in xrange(num_units)}
 
     task_master.update_bundle(work_spec, work_units)
 
@@ -71,8 +76,9 @@ def test_task_master_manage_workers(task_master):
     
     start = time.time()
     max_test_time = 60
-    modes = dict()
     finished_cleanly = False
+    already_set_idle = False
+    already_set_terminate = False
     while time.time() - start < max_test_time:
 
         for res in results:
@@ -82,27 +88,142 @@ def test_task_master_manage_workers(task_master):
             except multiprocessing.TimeoutError:
                 pass
 
-        for mode in [task_master.TERMINATE, task_master.IDLE, task_master.RUN]:
-            modes[mode] = task_master.registry.pull('observed_modes_' + mode)
-            assert all([isinstance(c, (int, float)) for c in modes[mode].values()])
+        modes = task_master.mode_counts()
+        logger.critical(modes)
 
-        logger.critical({s: num_seen(s, modes) for s in modes})
-
-        if num_seen(task_master.RUN, modes) == num_workers:
+        if modes[task_master.RUN] == num_workers:
             task_master.idle_all_workers()
+            already_set_idle = True
 
-        if num_seen(task_master.IDLE, modes) == num_workers:
-            assert num_seen(task_master.RUN, modes) == num_workers
+        if modes[task_master.IDLE] == num_workers:
+            assert already_set_idle
             logger.critical('setting mode to TERMINATE')
             task_master.set_mode(task_master.TERMINATE)
+            already_set_terminate = True
         
-        if num_seen(task_master.TERMINATE, modes) == num_workers:
-            assert num_seen(task_master.IDLE, modes) == num_workers
+        if modes[task_master.TERMINATE] == num_workers:
+            assert already_set_idle
+            assert already_set_terminate
             finished_cleanly = True
             break
+
+        time.sleep(1)
 
     if not finished_cleanly:
         raise Exception('timed out after %d seconds' % (time.time() - start))
 
     workers.join()
     logger.info('finished running %d worker processes' % num_workers)
+
+
+def test_task_master_multi_worker(task_master):
+    num_units = 10
+    num_units_cursor = 0
+    work_units = {'key' + str(x): dict(config=task_master.registry.config) 
+                  for x in xrange(num_units_cursor, num_units_cursor + num_units)}
+    num_units_cursor += num_units
+    task_master.update_bundle(work_spec, work_units)
+
+    task_master.set_mode(task_master.RUN)
+
+    p = multiprocessing.Process(target=run_worker, 
+                                args=(MultiWorker, task_master.registry.config))
+    num_workers = multiprocessing.cpu_count()
+    logger.critical('expecting num_workers=%d', num_workers)
+
+    start = time.time()
+    max_test_time = 60
+    finished_cleanly = False
+    already_set_idle = False
+    already_set_terminate = False
+    p.start()
+
+    while time.time() - start < max_test_time:
+
+        modes = task_master.mode_counts()
+        logger.critical(modes)
+
+        if modes[task_master.RUN] >= num_workers:
+            task_master.idle_all_workers()
+            already_set_idle = True
+
+        if modes[task_master.IDLE] >= 0 and already_set_idle:
+            logger.critical('setting mode to TERMINATE')
+            task_master.set_mode(task_master.TERMINATE)
+            already_set_terminate = True
+        
+        if p.exitcode is not None:
+            assert already_set_idle
+            assert already_set_terminate
+            if p.exitcode == 0:
+                finished_cleanly = True
+                break
+
+        time.sleep(2)
+
+    if not finished_cleanly:
+        raise Exception('timed out after %d seconds' % (time.time() - start))
+
+    p.join()
+    logger.info('finished running %d worker processes', num_workers)
+
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_finished(work_spec['name']) >= num_workers
+
+
+def test_task_master_multi_worker_failed_task(task_master):
+    work_spec_broken = copy.deepcopy(work_spec)
+    work_spec_broken['run_function'] = 'work_program_broken'
+
+    num_units = 10
+    num_units_cursor = 0
+    work_units = {'key' + str(x): dict(config=task_master.registry.config) 
+                  for x in xrange(num_units_cursor, num_units_cursor + num_units)}
+    num_units_cursor += num_units
+    task_master.update_bundle(work_spec_broken, work_units)
+
+    task_master.set_mode(task_master.RUN)
+
+    p = multiprocessing.Process(target=run_worker, 
+                                args=(MultiWorker, task_master.registry.config))
+    num_workers = multiprocessing.cpu_count()
+    logger.critical('expecting num_workers=%d', num_workers)
+
+    start = time.time()
+    max_test_time = 60
+    finished_cleanly = False
+    already_set_idle = False
+    already_set_terminate = False
+    p.start()
+
+    while time.time() - start < max_test_time:
+
+        modes = task_master.mode_counts()
+        logger.critical(modes)
+
+        if modes[task_master.RUN] >= num_workers:
+            task_master.idle_all_workers()
+            already_set_idle = True
+
+        if modes[task_master.IDLE] >= 0 and already_set_idle:
+            logger.critical('setting mode to TERMINATE')
+            task_master.set_mode(task_master.TERMINATE)
+            already_set_terminate = True
+        
+        if p.exitcode is not None:
+            assert already_set_idle
+            assert already_set_terminate
+            if p.exitcode == 0:
+                finished_cleanly = True
+                break
+
+        time.sleep(2)
+
+    if not finished_cleanly:
+        raise Exception('timed out after %d seconds' % (time.time() - start))
+
+    p.join()
+    logger.info('finished running %d worker processes', num_workers)
+
+    assert task_master.num_failed(work_spec['name']) >= num_workers
+    assert task_master.num_finished(work_spec['name']) == 0

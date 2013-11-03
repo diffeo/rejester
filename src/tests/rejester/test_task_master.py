@@ -55,8 +55,8 @@ def test_task_master_basic_interface(task_master):
         min_gb = 8,
         config = dict(many='', params=''),
         module = 'tests.rejester.test_workers',
-        exec_function = 'work_program',
-        shutdown_function = 'work_program',
+        run_function = 'work_program',
+        terminate_function = 'work_program',
     )
 
     work_units = dict(foo={}, bar={})
@@ -91,8 +91,8 @@ def test_task_master_reset_all(task_master):
         min_gb = 8,
         config = dict(many='', params=''),
         module = 'tests.rejester.test_workers',
-        exec_function = 'work_program',
-        shutdown_function = 'work_program',
+        run_function = 'work_program',
+        terminate_function = 'work_program',
     )
 
     work_units = dict(foo={}, bar={})
@@ -156,10 +156,3 @@ def test_task_master_throughput(task_master):
 
     work_unit = task_master.get_work(available_gb=13)
     assert work_unit.key in work_units
-
-
-def test_task_master_register(task_master):
-    worker_id = task_master.register_worker()
-    assert worker_id in task_master.registry.pull('workers')
-    task_master.unregister_worker()
-    assert not task_master.registry.pull('workers')

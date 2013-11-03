@@ -8,6 +8,7 @@ Copyright 2012-2013 Diffeo, Inc.
 import uuid
 import time
 import logging
+import traceback
 from operator import itemgetter
 
 from rejester._logging import logger
@@ -20,6 +21,9 @@ NICE_LEVELS = 'NICE_LEVELS'
 WORK_SPECS = 'WORK_SPECS'
 WORK_UNITS_ = 'WORK_UNITS_'
 _FINISHED = '_FINISHED'
+_FAILED = '_FAILED'
+WORKER_STATE_ = 'WORKER_STATE_'
+WORKER_OBSERVED_MODE = 'WORKER_OBSERVED_MODE'
 
 class WorkUnit(object):
     def __init__(self, registry, work_spec_name, key, data):
@@ -27,41 +31,42 @@ class WorkUnit(object):
         self.work_spec_name = work_spec_name
         self.key = key
         self.data = data
-        self._finished = False
-        self._failed = False
+        self.finished = False
+        self.failed = False
         self.spec = self.registry.get(WORK_SPECS, self.work_spec_name)
         self.module = __import__(
             self.spec['module'], globals(), (), 
-            [self.spec['exec_function'], self.spec['shutdown_function']], -1)
+            [self.spec['run_function'], 
+             self.spec['terminate_function']], -1)
 
+    def __repr__(self):
+        return self.key
 
-    def execute(self):
+    def run(self):
         '''execute this WorkUnit using the function specified in its
         work_spec.  Is called multiple times.
         '''
-        exec_function = getattr(self.module, self.spec['exec_function'])
-        ret_val = exec_function(self)
+        run_function = getattr(self.module, self.spec['run_function'])
+        ret_val = run_function(self)
         self.update()
         return ret_val
 
-
-    def shutdown(self):
+    def terminate(self):
         '''shutdown this WorkUnit using the function specified in its
         work_spec.  Is called multiple times.
         '''
-        shutdown_function = getattr(self.module, self.spec['shutdown_function'])
-        ret_val = shutdown_function(self)
+        terminate_function = getattr(self.module, self.spec['terminate_function'])
+        ret_val = terminate_function(self)
         self.update(lease_time=-10)
-        logger.critical('called shutdown')
+        logger.critical('called workunit.terminate()')
         return ret_val
-
 
     def update(self, lease_time=300):
         '''reset the task lease by incrementing lease_time.  Default is to put
         it five minutes ahead of now.  Setting lease_time<0 will drop
         the lease.
         '''
-        if self._finished:
+        if self.finished:
             raise ProgrammerError('cannot update after finishing at task')
         with self.registry.lock() as session:
             session.update(
@@ -69,33 +74,32 @@ class WorkUnit(object):
                 {self.key: self.data}, 
                 {self.key: time.time() + lease_time})
 
-
     def finish(self):
         '''move this WorkUnit to finished state
         '''
-        if self._finished:
+        if self.finished:
             return
         with self.registry.lock() as session:
             session.move(
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FINISHED,
                 {self.key: self.data})
-        self._finished = True
+        self.finished = True
 
-
-    def failed(self):
+    def fail(self, exc=None):
         '''move this WorkUnit to failed state and record info about the
         worker
         '''
-        if self._failed:
+        if self.failed:
             return
-        self.data['worker_state'] = self.worker_state
+        self.data['traceback'] = exc and traceback.format_exc(exc) or exc
+        #self.data['worker_state'] = self.worker_state
         with self.registry.lock() as session:
             session.move(
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FAILED,
                 {self.key: self.data})
-        self._failed = True
+        self.failed = True
 
 
 class TaskMaster(object):
@@ -114,21 +118,8 @@ class TaskMaster(object):
 
     def __init__(self, config):
         config['app_name'] = 'rejester'
+        self.config = config
         self.registry = Registry(config)
-
-    def register_worker(self):
-        '''record the availability of this worker and get a unique identifer
-        '''
-        self.worker_id = uuid.uuid4()
-        with self.registry.lock() as session:
-            session.update('workers', {self.worker_id: ('host_info',)})
-        return self.worker_id
-
-    def unregister_worker(self):
-        '''remove this worker from the list of available workers
-        ''' 
-        with self.registry.lock() as session:
-            session.popmany('workers', self.worker_id)
 
     RUN = 'RUN'
     IDLE = 'IDLE'
@@ -140,6 +131,7 @@ class TaskMaster(object):
             raise ProgrammerError('mode=%r is not recognized' % mode)
         with self.registry.lock() as session:
             session.set('modes', 'mode', mode)
+        logger.info('set mode to %s', mode)
 
     def get_mode(self):
         'returns mode, defaults to IDLE'
@@ -157,6 +149,25 @@ class TaskMaster(object):
             logger.warn('waiting for pending work_units: %r', num_pending)
             time.sleep(1)
 
+    def mode_counts(self):
+        '''counts the modes observed by workers who heartbeated within one
+        lifetime of the present time.
+        '''
+        modes = {self.RUN: 0, self.IDLE: 0, self.TERMINATE: 0}
+        for worker_id, mode in self.workers().items():
+            modes[mode] += 1
+        return modes
+
+    def workers(self, alive=True):
+        '''returns dictionary of all worker_ids and current mode.  If
+        alive=True, then only include worker_ids that have heartbeated
+        within one lifetime of now.
+
+        '''
+        with self.registry.lock() as session:
+            return session.filter(
+                WORKER_OBSERVED_MODE, 
+                priority_min=alive and time.time() or None)
 
     @classmethod
     def validate_work_spec(cls, work_spec):
@@ -178,8 +189,12 @@ class TaskMaster(object):
     def num_finished(self, work_spec_name):
         return self.registry.len(WORK_UNITS_ + work_spec_name + _FINISHED)
 
+    def num_failed(self, work_spec_name):
+        return self.registry.len(WORK_UNITS_ + work_spec_name + _FAILED)
+
     def num_tasks(self, work_spec_name):
         return self.num_finished(work_spec_name) + \
+               self.num_failed(work_spec_name) + \
                self.registry.len(WORK_UNITS_ + work_spec_name)
 
     def inspect_work_unit(self, work_spec_name, work_unit_key):
@@ -269,3 +284,22 @@ class TaskMaster(object):
                         _work_unit[0], _work_unit[1])
 
             ## did not find work!
+
+
+    def get_work_unit(self, work_spec_name, work_unit_key):
+        with self.registry.lock(atime=1000) as session:
+            ## try to get a task
+            work_unit_value = session.get(
+                WORK_UNITS_ + work_spec_name,
+                work_unit_key
+            )
+
+            if not work_unit_value:
+                raise KeyError('work_unit_key=%r not found in %r' 
+                               % (work_unit_key, work_spec_name))
+
+            return WorkUnit(
+                self.registry, work_spec_name,
+                work_unit_key, work_unit_value)
+
+
