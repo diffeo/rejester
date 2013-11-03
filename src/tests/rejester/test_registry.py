@@ -71,9 +71,20 @@ def test_registry_re_acquire_lock(registry):
 def test_registry_update_pull(registry):
     test_dict = dict(cars=10, houses=5)
 
-    with registry.lock(atime=5000) as session:
+    with registry.lock() as session:
         session.update('test_dict', test_dict)
         assert session.pull('test_dict') == test_dict
+
+
+def test_registry_filter(registry):
+    test_dict = dict(cars=10, houses=5)
+
+    with registry.lock() as session:
+        session.update('test_dict', test_dict, 
+                       priorities=dict(cars=100, houses=-100))
+        assert session.filter('test_dict') == test_dict
+        assert session.filter('test_dict', priority_min=0) == dict(cars=10)
+        assert session.filter('test_dict', priority_max=0) == dict(houses=5)
 
 
 def test_registry_update_expire(registry):
@@ -104,6 +115,27 @@ def test_registry_set(registry):
         session.set('test_dict', 'cars', 10)
         session.set('test_dict', 'houses', 5)
         assert session.pull('test_dict') == test_dict
+
+
+def test_registry_set_priority(registry):
+    with registry.lock(atime=5000) as session:
+        session.set('test_dict', 'cars', 10, 100)
+        with pytest.raises(PriorityRangeEmpty):
+            session.popitem('test_dict', priority_max=0)
+        assert session.popitem('test_dict', priority_max=200) == ('cars', 10)
+
+
+def test_registry_delete(registry):
+    test_dict = dict(cars=10, houses=5)
+
+    with registry.lock(atime=5000) as session:
+        session.set('test_dict', 'cars', 10)
+        session.set('test_dict', 'houses', 5)
+        assert session.pull('test_dict') == test_dict
+        session.delete('test_dict')
+        assert session.pull('test_dict') == {}
+        with pytest.raises(PriorityRangeEmpty):
+            session.popitem('test_dict')
 
 
 def test_registry_popmany(registry):

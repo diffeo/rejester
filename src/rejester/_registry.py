@@ -487,7 +487,7 @@ since the server is busy.
         script = '''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
-            -- remove next item of from_dict
+            -- find the next key and priority
             local next_items = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")
             local next_key = next_items[1]
             local next_priority = next_items[2]
@@ -496,6 +496,7 @@ since the server is busy.
                 return {}
             end
 
+            -- remove next item of from_dict
             redis.call("zrem", KEYS[2] .. "keys", next_key)
 
             local next_val = redis.call("hget", KEYS[2], next_key)
@@ -629,6 +630,52 @@ since the server is busy.
                      for key, value in res.iteritems()}
         return split_res
 
+    def filter(self, dict_name, priority_min='-inf', priority_max='+inf'):
+        '''Pull all keys and values in dictionary between priority_min/max
+        '''
+        if self._lock_name is None:
+            raise ProgrammerError('must acquire lock first')
+        script = '''
+        if redis.call("get", KEYS[1]) == ARGV[1]
+        then
+            -- find all the keys and priorities within range
+            local next_keys = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3])
+            
+            if not next_keys[1] then
+                return {}
+            end
+
+            local t = {}
+            for i = 1, #next_keys  do
+                local next_val = redis.call("hget", KEYS[2], next_keys[i])
+                table.insert(t, next_keys[i])
+                table.insert(t, next_val)
+            end
+
+            return t
+        else
+            -- ERROR: No longer own the lock
+            return -1
+        end
+        '''
+        conn = redis.Redis(connection_pool=self.pool)
+        res = conn.eval(script, 2, self._lock_name, 
+                        self._namespace(dict_name), 
+                        self._session_lock_identifier,
+                        priority_min, priority_max,
+        )
+        if None in res or res == -1:
+            raise KeyError(
+                'Registry.filter(%r, %r, %r) --> %r' 
+                % (dict_name, priority_min, priority_max, res))
+
+        logger.debug('Registry.filter(%r, %r, %r) --> %r', 
+                     dict_name, priority_min, priority_max, res)
+        split_res = {self._decode(res[i]):
+                     self._decode(res[i+1])
+                     for i in xrange(0, len(res)-1, 2)}
+        return split_res
+
     def get(self, dict_name, key, default=None):
         '''
         get value for key, if missing return default if provided
@@ -638,11 +685,23 @@ since the server is busy.
         val = conn.hget(dict_name, self._encode(key))
         return val and self._decode(val) or default
 
-    def set(self, dict_name, key, value):
+    def set(self, dict_name, key, value, priority=None):
         '''
         set value for key
         '''
-        self.update(dict_name, {key: value})
+        if priority is not None:
+            priorities = {key: priority}
+        else:
+            priorities = None
+        self.update(dict_name, {key: value}, priorities=priorities)
+
+    def delete(self, dict_name):
+        '''
+        delete the entire hash named dict_name
+        '''
+        dict_name = self._namespace(dict_name)
+        conn = redis.Redis(connection_pool=self.pool)
+        conn.delete(dict_name, dict_name + 'keys')
 
     def direct_call(self, *args):
         '''execute a direct redis call against this Registry instances
