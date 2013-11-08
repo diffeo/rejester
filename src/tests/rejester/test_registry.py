@@ -10,7 +10,7 @@ import pytest
 import rejester
 from rejester import Registry
 from rejester._logging import logger
-from rejester.exceptions import PriorityRangeEmpty
+from rejester.exceptions import PriorityRangeEmpty, EnvironmentError
 from collections import defaultdict
 from tests.rejester.make_namespace_string import make_namespace_string
 
@@ -46,7 +46,7 @@ def test_registry_lock_block(registry):
 
 
 def test_registry_lock_loss(registry):
-    with pytest.raises(rejester.exceptions.EnvironmentError) as env_error:
+    with pytest.raises(EnvironmentError) as env_error:
         with registry.lock(ltime=1) as session1:
             ## check that we can get the lock
             with registry.lock(atime=100) as session2:
@@ -55,7 +55,7 @@ def test_registry_lock_loss(registry):
 
 
 def test_registry_re_acquire_lock(registry):
-    with pytest.raises(rejester.exceptions.EnvironmentError) as env_error:
+    with pytest.raises(EnvironmentError) as env_error:
         with registry.lock(ltime=1000) as session:
             ## lower the ltime
             assert session.re_acquire_lock(ltime=1)
@@ -315,4 +315,33 @@ def test_registry_increment(registry):
         session.increment('test_dict', 'foo')
         assert session.pull('test_dict') == dict(dog=1, foo=6.5)
 
+
+def test_registry_1to1(registry):
+    
+    with registry.lock() as session:
+        session.set_1to1('test_dict', 'k1', 'v1')
+        assert session.get_1to1('test_dict', 'k1') == 'v1'
+        assert session.get_1to1('test_dict', 'v1') == 'k1'
+
+        session.set_1to1('test_dict', 'v1', 'k3')
+        assert session.get_1to1('test_dict', 'k3') == 'v1'
+        assert session.get_1to1('test_dict', 'v1') == 'k3'
+
+
+def test_registry_update_locks(registry):
+
+    test_dict = dict(dog=10, cat=42)
+    test_locks = dict(dog='w1', cat='w3')
+
+    with registry.lock() as session:
+        session.update('test_dict', test_dict, locks=test_locks)
+        assert session.pull('test_dict') == test_dict
+
+        session.update('test_dict', dict(dog=4), locks=dict(dog='w1'))
+        assert session.get('test_dict', 'dog') == 4
+
+        with pytest.raises(EnvironmentError):
+            session.update('test_dict', dict(dog=8), locks=dict(dog='w3'))
+
+        assert session.get('test_dict', 'dog') == 4
 

@@ -226,6 +226,8 @@ since the server is busy.
         practice from a security standpoint to eval data from a
         database.
         '''
+        if len(string) == 0:
+            return None
         if string[0] == 't':
             return tuple([self._decode(item) for item in
                           string[2:].split('-')])
@@ -233,7 +235,7 @@ since the server is busy.
             return UUID(int=int(string[2:]))
         elif string[0] == 'j':
             try:
-                return json.loads(string[2:])
+                return string[2:] and json.loads(string[2:]) or None
             except ValueError, exc:
                 logger.critical('%r --> tried to json.loads(%r)', string, string[2:], exc_info=True)
                 raise
@@ -246,7 +248,8 @@ since the server is busy.
             logger.error('Fail to decode string %r', string, exc_info=True)
             raise TypeError
 
-    def update(self, dict_name, mapping=None, priorities=None, expire=None):
+    def update(self, dict_name, mapping=None, priorities=None, expire=None,
+               locks=None):
         '''Add mapping to a dictionary, replacing previous values
 
         :param mapping: a dict of keys and values to update in
@@ -263,6 +266,18 @@ since the server is busy.
         Can be called with only dict_name and expire to refresh the
         expiration time.
 
+        :param locks: a dict with the same keys as those in the
+        mapping.  Before making any particular update, this function
+        checks if a key is present in a 'locks' table for this dict,
+        and if so, then its value must match the value provided in the
+        input locks dict for that key.  If not, then the value
+        provided in the locks dict is inserted into the 'locks' table.
+        If the locks parameter is None, then no lock checking is
+        performed.
+
+        NB: locks are only enforced if present, so nothing prevents
+        another caller from coming in an modifying data without using
+        locks.
         '''
         if self._lock_name is None:
             raise ProgrammerError('must acquire lock first')
@@ -272,12 +287,25 @@ since the server is busy.
         if priorities is None:
             ## set all priorities to zero
             priorities = defaultdict(int)
+        if locks is None:
+            ## set all locks to None
+            locks = defaultdict(lambda: '')
         if not (expire is None or isinstance(expire, int)):
             raise ProgrammerError('expire must be int or unspecified')
         script = '''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
-            for i = 3, #ARGV, 3  do
+            for i = 3, #ARGV, 4  do
+                if ARGV[i+3] ~= '' then
+                    local current_lock = redis.call("hget",  KEYS[2] .. "_locks", ARGV[i])
+
+                    if current_lock and ARGV[i+3] ~= current_lock then
+                        return {-1, ARGV[i], current_lock, ARGV[i+3]}
+                    end
+                    redis.call("hset",  KEYS[2] .. "_locks", ARGV[i], ARGV[i+3])
+                end
+            end
+            for i = 3, #ARGV, 4  do
                 redis.call("hset",  KEYS[2], ARGV[i], ARGV[i+1])
                 redis.call("zadd",  KEYS[2] .. "keys", ARGV[i+2], ARGV[i])
             end
@@ -285,10 +313,10 @@ since the server is busy.
                 redis.call("expire", KEYS[2], ARGV[2])
                 redis.call("expire", KEYS[2] .. "keys", ARGV[2])
             end
-            return 1
+            return {1, 0}
         else
             -- ERROR: No longer own the lock
-            return 0
+            return {0, 0}
         end
         '''
         dict_name = self._namespace(dict_name)
@@ -300,15 +328,19 @@ since the server is busy.
             items.append(self._encode(key))
             items.append(self._encode(value))
             items.append(priorities[key])
+            items.append(locks[key])
 
         conn = redis.Redis(connection_pool=self.pool)
         res = conn.eval(script, 2, self._lock_name, dict_name, 
                         self._session_lock_identifier, expire, 
                         *items)
-        if not res:
-            # We either lost the lock or something else went wrong
+        if res[0] == 0:
             raise EnvironmentError(
                 'Unable to add items to %s in registry' % dict_name)
+        elif res[0] == -1:
+            raise EnvironmentError(
+                'lost lock on key=%r owned by %r not %r in %s' 
+                % (self._decode(res[1]), res[2], res[3], dict_name))
 
 
     def reset_priorities(self, dict_name, priority):
@@ -676,14 +708,88 @@ since the server is busy.
                      for i in xrange(0, len(res)-1, 2)}
         return split_res
 
-    def get(self, dict_name, key, default=None):
+    def set_1to1(self, dict_name, key1, key2):
+        '''set two keys to be equal in a 1-to-1 mapping.
+        '''
+        if self._lock_name is None:
+            raise ProgrammerError('must acquire lock first')
+        script = '''
+        if redis.call("get", KEYS[1]) == ARGV[1]
+        then
+            redis.call("hset", KEYS[2] .. "_locks", ARGV[2], ARGV[3])
+            redis.call("hset", KEYS[2] .. "_locks", ARGV[3], ARGV[2])
+        else
+            -- ERROR: No longer own the lock
+            return -1
+        end
+        '''
+        conn = redis.Redis(connection_pool=self.pool)
+        res = conn.eval(script, 2, self._lock_name, 
+                        self._namespace(dict_name), 
+                        self._session_lock_identifier,
+                        self._encode(key1),
+                        self._encode(key2),
+        )
+        if res == -1:
+            raise EnvironmentError()
+
+    def get_1to1(self, dict_name, key):
+        '''lookup the value of a key in a 1-to-1 mapping.
+        '''
+        if self._lock_name is None:
+            raise ProgrammerError('must acquire lock first')
+        script = '''
+        if redis.call("get", KEYS[1]) == ARGV[1]
+        then
+            local key1 = redis.call("hget", KEYS[2] .. "_locks", ARGV[2])
+            local key2 = ''
+            if key1 then
+                key2 = redis.call("hget", KEYS[2] .. "_locks", key1)
+            else
+                key1 = ''
+            end
+
+            return {key1, key2}
+        else
+            -- ERROR: No longer own the lock
+            return -1
+        end
+        '''
+        conn = redis.Redis(connection_pool=self.pool)
+        res = conn.eval(script, 2, self._lock_name, 
+                        self._namespace(dict_name), 
+                        self._session_lock_identifier,
+                        self._encode(key),
+        )
+        if res == -1:
+            raise EnvironmentError()
+
+        logger.critical(res)
+        key1, key2 = map(self._decode, res)
+
+        if not key == key2:
+            raise ProgrammerError(
+                '1to1 mapping is inconsistent: %s != %s'
+                % (dict_name, key, key2))
+
+        return key1
+
+    def get(self, dict_name, key, default=None, include_priority=False):
         '''
         get value for key, if missing return default if provided
         '''
         dict_name = self._namespace(dict_name)
+        key = self._encode(key)
         conn = redis.Redis(connection_pool=self.pool)
-        val = conn.hget(dict_name, self._encode(key))
-        return val and self._decode(val) or default
+        val = conn.hget(dict_name, key)
+        _val = val and self._decode(val) or default
+        if include_priority:
+            if val:
+                priority = conn.zscore(dict_name + 'keys', key)
+                return _val, priority
+            else:
+                return _val, None
+        return _val
 
     def set(self, dict_name, key, value, priority=None):
         '''
