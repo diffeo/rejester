@@ -37,6 +37,10 @@ def registry(request):
     return registry
 
 
+def test_registry_decode(registry):
+    for foo in [{}, None, '', 0, 1]:
+        assert registry._decode(registry._encode(foo)) == foo
+
 def test_registry_lock_block(registry):
     with registry.lock(ltime=100) as session1:
         ## check that we cannot get the lock

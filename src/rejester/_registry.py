@@ -235,7 +235,10 @@ since the server is busy.
             return UUID(int=int(string[2:]))
         elif string[0] == 'j':
             try:
-                return string[2:] and json.loads(string[2:]) or None
+                if string[2:]:
+                    return json.loads(string[2:])
+                else:
+                    None
             except ValueError, exc:
                 logger.critical('%r --> tried to json.loads(%r)', string, string[2:], exc_info=True)
                 raise
@@ -763,13 +766,14 @@ since the server is busy.
         )
         if res == -1:
             raise EnvironmentError()
-
-        logger.critical(res)
         key1, key2 = map(self._decode, res)
+
+        if not (key1 and key2):
+            raise KeyError('%r not found in %r' % (key, dict_name))
 
         if not key == key2:
             raise ProgrammerError(
-                '1to1 mapping is inconsistent: %s != %s'
+                '1to1 mapping %r is inconsistent: %s != %s'
                 % (dict_name, key, key2))
 
         return key1
