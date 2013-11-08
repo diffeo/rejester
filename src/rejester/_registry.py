@@ -300,10 +300,8 @@ since the server is busy.
         then
             for i = 3, #ARGV, 4  do
                 if ARGV[i+3] ~= '' then
-                    local current_lock = redis.call("hget",  KEYS[2] .. "_locks", ARGV[i])
-
-                    if current_lock and ARGV[i+3] ~= current_lock then
-                        return {-1, ARGV[i], current_lock, ARGV[i+3]}
+                    local curr_lock = redis.call("hget",  KEYS[2] .. "_locks", ARGV[i])                    if curr_lock and curr_lock ~= ARGV[i+3] then
+                        return {-1, ARGV[i], curr_lock, ARGV[i+3]}
                     end
                     redis.call("hset",  KEYS[2] .. "_locks", ARGV[i], ARGV[i+3])
                 end
@@ -331,7 +329,7 @@ since the server is busy.
             items.append(self._encode(key))
             items.append(self._encode(value))
             items.append(priorities[key])
-            items.append(locks[key])
+            items.append(self._encode(locks[key]))
 
         conn = redis.Redis(connection_pool=self.pool)
         res = conn.eval(script, 2, self._lock_name, dict_name, 
@@ -421,6 +419,7 @@ since the server is busy.
     def getitem_reset(
             self, dict_name, priority_min='-inf', priority_max='+inf',
             new_priority=0,
+            lock=None
         ):
         '''D.getitem_reset() -> (key, value), return some pair that has a
         priority that satisfies the priority_min/max constraint; but
@@ -443,6 +442,11 @@ since the server is busy.
 
             local next_val = redis.call("hget", KEYS[2], next_key)
             redis.call("zadd", KEYS[2] .. "keys", ARGV[4], next_key)
+            if ARGV[5] then
+                redis.call("hset", KEYS[2] .. "_locks", next_key, ARGV[5])
+            else
+                redis.call("hdel", KEYS[2] .. "_locks", next_key)
+            end
 
             return {next_key, next_val}
         else
@@ -458,6 +462,7 @@ since the server is busy.
                               self._session_lock_identifier,
                               priority_min, priority_max,
                               new_priority,
+                              self._encode(lock),
                               )
         if key_value == -1:
             raise KeyError(

@@ -279,7 +279,6 @@ def test_registry_getitem_reset_priorities(registry):
         assert session.popitem('test_dict', priority_min=-100) 
         assert session.popitem('test_dict', priority_min=-100) 
 
-
 def test_registry_getitem_reset(registry):
     test_dict = dict(cars=10, houses=5)
 
@@ -349,3 +348,24 @@ def test_registry_update_locks(registry):
 
         assert session.get('test_dict', 'dog') == 4
 
+def test_registry_getitem_reset_lock(registry):
+    test_dict = dict(cars=10, houses=5)
+
+    with registry.lock() as session:
+        session.update('test_dict', test_dict)
+        assert session.pull('test_dict') == test_dict
+        k1, v1 = session.getitem_reset('test_dict', lock='w1', new_priority=100)
+        k3, v3 = session.getitem_reset('test_dict', lock='w3', priority_max=100)
+
+        logger.info({k1: v1, k3: v3})
+        logger.info(session.pull('test_dict_locks'))
+        good_locks = {k1: 'w1', k3: 'w3'}
+        bad_locks = {k1: 'w1-', k3: 'w3'}
+        assert good_locks == session.pull('test_dict_locks')
+        assert  bad_locks != session.pull('test_dict_locks')
+        logger.info('good_locks: %r, bad_locks: %r', good_locks, bad_locks)
+
+        session.update('test_dict', mapping=test_dict, locks=good_locks)
+
+        with pytest.raises(EnvironmentError):
+            session.update('test_dict', mapping=test_dict, locks={k1: 'w1-', k3: 'w3'})
