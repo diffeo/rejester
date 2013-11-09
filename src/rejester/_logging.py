@@ -36,7 +36,7 @@ formatter = FixedWidthFormatter('%(asctime)s pid=%(process)d %(fixed_width_filen
 ch.setLevel('DEBUG')
 ch.setFormatter(formatter)
 
-logger = logging.getLogger('registry')
+logger = logging.getLogger('rejester')
 logger.setLevel('DEBUG')
 logger.handlers = []
 logger.addHandler(ch)

@@ -19,9 +19,10 @@ from uuid import UUID
 from functools import wraps
 from collections import defaultdict
 
-from rejester._logging import logger
 from rejester.exceptions import EnvironmentError, LockError, \
     PriorityRangeEmpty, ProgrammerError
+
+logger = logging.getLogger('rejester.Registry')
 
 class Registry(object):
     '''provides a centralized storage mechanism for dictionaries,

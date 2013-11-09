@@ -17,10 +17,11 @@ import traceback
 import pkg_resources
 from operator import itemgetter
 
-from rejester._logging import logger
 from rejester._registry import Registry
-from rejester.exceptions import ProgrammerError, LockError, LostLease, EnvironmentError
+from rejester.exceptions import ProgrammerError, LockError, \
+    LostLease, EnvironmentError
 
+logger = logging.getLogger('rejester.TaskMaster')
 
 BUNDLES = 'bundles'
 NICE_LEVELS = 'NICE_LEVELS'

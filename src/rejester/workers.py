@@ -10,14 +10,15 @@ import uuid
 import gevent
 import psutil
 import random
+import logging
 import multiprocessing
 from signal import signal, SIGHUP, SIGTERM, SIGABRT
 from operator import itemgetter
 from collections import deque
-from rejester._logging import logger
 from rejester._task_master import TaskMaster, Worker, \
     WORKER_OBSERVED_MODE, WORKER_STATE_
 
+logger = logging.getLogger('rejester.workers')
 
 def run_worker(worker_class, *args, **kwargs):
     '''multiprocessing cannot apply_async to a class constructor, even if
