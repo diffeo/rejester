@@ -27,3 +27,9 @@ class PriorityRangeEmpty(RejesterException):
     given the priority_min/max, no item is available to be returned
     '''
     pass
+
+class LostLease(RejesterException):
+    '''worker waited too long between calls to update and another worker
+got the WorkItem'''
+    pass
+
