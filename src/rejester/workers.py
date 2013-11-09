@@ -116,7 +116,7 @@ class HeadlessWorker(Worker):
         super(HeadlessWorker, self).__init__(config)
         for sig_num in [SIGTERM, SIGHUP, SIGABRT]:
             signal(sig_num, self.terminate)
-        self.work_unit = self.task_master.get_work_unit(
+        self.work_unit = self.task_master.get_assigned_work_unit(
             worker_id, work_spec_name, work_unit_key)
         ## carry this to overwrite self.worker_id after .register()
         self._pre_assigned_worker_id = worker_id

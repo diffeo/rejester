@@ -383,14 +383,23 @@ class TaskMaster(object):
             logger.critical('failed to get work', exc_info=True)
             return
 
-    def get_work_unit(self, worker_id, work_spec_name, work_unit_key):
+    def get_assigned_work_unit(
+            self, worker_id, work_spec_name, work_unit_key,
+        ):
+        '''get a specific WorkUnit that has already been assigned to a
+        particular worker_id
+        '''
         with self.registry.lock(atime=1000, ltime=10000) as session:
-            #assigned_work_unit_key = session.get_1to1(
-            #    WORK_UNITS_ + work_spec_name + '_locks',
-            #    worker_id)
-            #if not assigned_work_unit_key == work_unit_key:
-            #    raise EnvironmentError('assigned_work_unit_key=%r != %'
-            #                           % (assigned_work_unit_key, work_unit_key))
+            assigned_work_unit_key = session.get(
+                WORK_UNITS_ + work_spec_name + '_locks', worker_id)
+            if not assigned_work_unit_key == work_unit_key:
+                ## raise LostLease instead of EnvironmentError, so
+                ## users of TaskMaster can have a single type of
+                ## expected exception, rather than two
+                raise LostLease(
+                    'assigned_work_unit_key=%r != %'
+                    % (assigned_work_unit_key, work_unit_key))
+            ## could trap EnvironmentError and raise LostLease instead
             work_unit_data = session.get(
                         WORK_UNITS_ + work_spec_name,
                         work_unit_key)
