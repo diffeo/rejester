@@ -359,8 +359,8 @@ def test_registry_getitem_reset_lock(registry):
 
         logger.info({k1: v1, k3: v3})
         logger.info(session.pull('test_dict_locks'))
-        good_locks = {k1: 'w1', k3: 'w3'}
-        bad_locks = {k1: 'w1-', k3: 'w3'}
+        good_locks = {k1: 'w1',  k3: 'w3', 'w1':  k1, 'w3': k3}
+        bad_locks  = {k1: 'w1-', k3: 'w3', 'w1-': k1, 'w3': k3}
         assert good_locks == session.pull('test_dict_locks')
         assert  bad_locks != session.pull('test_dict_locks')
         logger.info('good_locks: %r, bad_locks: %r', good_locks, bad_locks)

@@ -444,8 +444,11 @@ since the server is busy.
             redis.call("zadd", KEYS[2] .. "keys", ARGV[4], next_key)
             if ARGV[5] then
                 redis.call("hset", KEYS[2] .. "_locks", next_key, ARGV[5])
+                redis.call("hset", KEYS[2] .. "_locks", ARGV[5], next_key)
             else
+                local old_key2 = redis.call("hget", KEYS[2] .. "_locks", next_key)
                 redis.call("hdel", KEYS[2] .. "_locks", next_key)
+                redis.call("hdel", KEYS[2] .. "_locks", old_key2)
             end
 
             return {next_key, next_val}
