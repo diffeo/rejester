@@ -41,6 +41,7 @@ def test_registry_decode(registry):
     for foo in [{}, None, '', 0, 1]:
         assert registry._decode(registry._encode(foo)) == foo
 
+
 def test_registry_lock_block(registry):
     with registry.lock(ltime=100) as session1:
         ## check that we cannot get the lock
@@ -323,12 +324,12 @@ def test_registry_1to1(registry):
     
     with registry.lock() as session:
         session.set_1to1('test_dict', 'k1', 'v1')
-        assert session.get_1to1('test_dict', 'k1') == 'v1'
-        assert session.get_1to1('test_dict', 'v1') == 'k1'
+        assert session.get('test_dict', 'k1') == 'v1'
+        assert session.get('test_dict', 'v1') == 'k1'
 
         session.set_1to1('test_dict', 'v1', 'k3')
-        assert session.get_1to1('test_dict', 'k3') == 'v1'
-        assert session.get_1to1('test_dict', 'v1') == 'k3'
+        assert session.get('test_dict', 'k3') == 'v1'
+        assert session.get('test_dict', 'v1') == 'k3'
 
 
 def test_registry_update_locks(registry):
@@ -369,3 +370,16 @@ def test_registry_getitem_reset_lock(registry):
 
         with pytest.raises(EnvironmentError):
             session.update('test_dict', mapping=test_dict, locks={k1: 'w1-', k3: 'w3'})
+
+def test_registry_getitem_reset_lock_1to1(registry):
+    test_dict = dict(cars=10, houses=5)
+
+    with registry.lock() as session:
+        session.update('test_dict', test_dict)
+        assert session.pull('test_dict') == test_dict
+        k1, v1 = session.getitem_reset('test_dict', lock='w1', new_priority=100)
+        k3, v3 = session.getitem_reset('test_dict', lock='w3', priority_max=100)
+
+        locks = session.pull('test_dict_locks')
+        assert 'w1' in locks
+        assert locks['w1'] == session.get('test_dict_locks', 'w1')

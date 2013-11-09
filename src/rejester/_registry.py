@@ -300,7 +300,8 @@ since the server is busy.
         then
             for i = 3, #ARGV, 4  do
                 if ARGV[i+3] ~= '' then
-                    local curr_lock = redis.call("hget",  KEYS[2] .. "_locks", ARGV[i])                    if curr_lock and curr_lock ~= ARGV[i+3] then
+                    local curr_lock = redis.call("hget",  KEYS[2] .. "_locks", ARGV[i])                    
+                    if curr_lock and curr_lock ~= ARGV[i+3] then
                         return {-1, ARGV[i], curr_lock, ARGV[i+3]}
                     end
                     redis.call("hset",  KEYS[2] .. "_locks", ARGV[i], ARGV[i+3])
@@ -727,8 +728,8 @@ since the server is busy.
         script = '''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
-            redis.call("hset", KEYS[2] .. "_locks", ARGV[2], ARGV[3])
-            redis.call("hset", KEYS[2] .. "_locks", ARGV[3], ARGV[2])
+            redis.call("hset", KEYS[2], ARGV[2], ARGV[3])
+            redis.call("hset", KEYS[2], ARGV[3], ARGV[2])
         else
             -- ERROR: No longer own the lock
             return -1
@@ -743,48 +744,6 @@ since the server is busy.
         )
         if res == -1:
             raise EnvironmentError()
-
-    def get_1to1(self, dict_name, key):
-        '''lookup the value of a key in a 1-to-1 mapping.
-        '''
-        if self._lock_name is None:
-            raise ProgrammerError('must acquire lock first')
-        script = '''
-        if redis.call("get", KEYS[1]) == ARGV[1]
-        then
-            local key1 = redis.call("hget", KEYS[2] .. "_locks", ARGV[2])
-            local key2 = ''
-            if key1 then
-                key2 = redis.call("hget", KEYS[2] .. "_locks", key1)
-            else
-                key1 = ''
-            end
-
-            return {key1, key2}
-        else
-            -- ERROR: No longer own the lock
-            return -1
-        end
-        '''
-        conn = redis.Redis(connection_pool=self.pool)
-        res = conn.eval(script, 2, self._lock_name, 
-                        self._namespace(dict_name), 
-                        self._session_lock_identifier,
-                        self._encode(key),
-        )
-        if res == -1:
-            raise EnvironmentError()
-        key1, key2 = map(self._decode, res)
-
-        if not (key1 and key2):
-            raise KeyError('%r not found in %r' % (key, dict_name))
-
-        if not key == key2:
-            raise ProgrammerError(
-                '1to1 mapping %r is inconsistent: %s != %s'
-                % (dict_name, key, key2))
-
-        return key1
 
     def get(self, dict_name, key, default=None, include_priority=False):
         '''
