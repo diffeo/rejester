@@ -76,17 +76,16 @@ def test_task_master_manage_workers(task_master):
     
     start = time.time()
     max_test_time = 60
-    finished_cleanly = False
     already_set_idle = False
     already_set_terminate = False
-    while time.time() - start < max_test_time:
+    while results and ((time.time() - start) < max_test_time):
 
         for res in results:
             try:
                 ## raises exceptions from children processes
                 res.get(0)
             except multiprocessing.TimeoutError:
-                pass
+                results.remove(res)
 
         modes = task_master.mode_counts()
         logger.critical(modes)
@@ -100,16 +99,10 @@ def test_task_master_manage_workers(task_master):
             logger.critical('setting mode to TERMINATE')
             task_master.set_mode(task_master.TERMINATE)
             already_set_terminate = True
-        
-        if modes[task_master.TERMINATE] == num_workers:
-            assert already_set_idle
-            assert already_set_terminate
-            finished_cleanly = True
-            break
 
         time.sleep(1)
 
-    if not finished_cleanly:
+    if not (already_set_terminate and already_set_idle):
         raise Exception('timed out after %d seconds' % (time.time() - start))
 
     workers.join()
