@@ -8,7 +8,7 @@ clean:
 test: clean
 	python setup.py install_test
 	py.test --genscript=runtests.py
-	cd src && python ../runtests.py -vvs -n 8 tests
+	cd src && python ../runtests.py --runperf -vvs -n 8 tests
 
 build: clean
 	python setup.py build bdist_egg sdist
