@@ -5,20 +5,18 @@ Copyright 2012-2013 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 import os
-import abc
 import time
 import uuid
-import psutil
 import gevent
+import psutil
 import random
-import socket
-import pkg_resources
 import multiprocessing
 from signal import signal, SIGHUP, SIGTERM, SIGABRT
 from operator import itemgetter
 from collections import deque
 from rejester._logging import logger
-from rejester._task_master import TaskMaster, WORKER_OBSERVED_MODE, WORKER_STATE_
+from rejester._task_master import TaskMaster, Worker, \
+    WORKER_OBSERVED_MODE, WORKER_STATE_
 
 
 def run_worker(worker_class, *args, **kwargs):
@@ -35,70 +33,6 @@ def run_worker(worker_class, *args, **kwargs):
     except Exception, exc:
         logger.critical('worker died!', exc_info=True)
         raise
-
-
-class Worker(object):
-
-    __metaclass__ = abc.ABCMeta
-
-    def __init__(self, config):
-        self.config = config
-        self.task_master = TaskMaster(config)
-        self.worker_id = None
-        self.lifetime = 300 ## five minutes
-
-    def environment(self):
-        '''
-        raw data about worker to support forensics on failed tasks
-        '''
-        env = dict(
-            worker_id = self.worker_id,
-            host = socket.gethostbyaddr(socket.gethostname()),
-            fqdn = socket.getfqdn(),
-            version = pkg_resources.get_distribution("rejester").version, # pylint: disable=E1103
-            working_set = [(dist.key, dist.version) for dist in pkg_resources.WorkingSet()], # pylint: disable=E1103
-            #config_hash = self.config['config_hash'],
-            #config_json = self.config['config_json'],
-            memory = psutil.phymem_usage(),
-        )
-        return env
-
-    def register(self):
-        '''record the availability of this worker and get a unique identifer
-        '''
-        if self.worker_id:
-            raise ProgrammerError('Worker.register cannot be called again without first calling unregister; it is not idempotent')
-        self.worker_id = uuid.uuid4().hex
-        self.heartbeat()
-        return self.worker_id
-
-    def unregister(self):
-        '''remove this worker from the list of available workers
-        ''' 
-        with self.task_master.registry.lock() as session:
-            session.delete(WORKER_STATE_ + self.worker_id)
-            session.popmany(WORKER_OBSERVED_MODE, self.worker_id)
-        self.worker_id = None
-
-    def heartbeat(self):
-        '''record the current worker state in the registry and also the
-        observed mode and return it
-
-        :returns mode:
-        ''' 
-        mode = self.task_master.get_mode()
-        with self.task_master.registry.lock() as session:
-            session.set(WORKER_OBSERVED_MODE, self.worker_id, mode,
-                        priority=time.time() + self.lifetime)
-            session.update(WORKER_STATE_ + self.worker_id, self.environment(), 
-                           expire=self.lifetime)
-        logger.info('worker observed mode=%r', mode)
-        return mode
-
-    @abc.abstractmethod
-    def run(self):
-        return
-
 
 
 class BlockingWorker(Worker):
@@ -125,7 +59,8 @@ class BlockingWorker(Worker):
 
             if mode == self.task_master.RUN:
                 if not self.work_unit:
-                    self.work_unit = self.task_master.get_work(available_gb=self.available_gb)
+                    self.work_unit = self.task_master.get_work(
+                        self.worker_id, self.available_gb)
                 if  self.work_unit:
                     ## this call will block the worker, so that it
                     ## fails to call heartbeat as often as it should
@@ -153,7 +88,7 @@ class GreenletWorker(Worker):
 
             if mode == self.task_master.IDLE:
                 if  self.work_unit:
-                    self.work_unit.idle()
+                    self.work_unit.terminate()
 
             if mode == self.task_master.TERMINATE:
                 if  self.work_unit:
@@ -165,8 +100,7 @@ class GreenletWorker(Worker):
 
             if mode == self.task_master.RUN:
                 if not self.work_unit:
-                    self.work_unit = self.task_master.get_work(
-                        available_gb=self.available_gb)
+                    self.work_unit = self.task_master.get_work(self.worker_id)
                 if self.work_unit and not self.greenlet:
                     self.greenlet = gevent.spawn(self.work_unit.run)
 
@@ -178,11 +112,18 @@ class HeadlessWorker(Worker):
     WorkUnit from its parent process, which is running MultiWorker
     '''
 
-    def __init__(self, config, work_spec_name, work_unit_key):
+    def __init__(self, config, worker_id, work_spec_name, work_unit_key):
         super(HeadlessWorker, self).__init__(config)
         for sig_num in [SIGTERM, SIGHUP, SIGABRT]:
             signal(sig_num, self.terminate)
-        self.work_unit = self.task_master.get_work_unit(work_spec_name, work_unit_key)
+        self.work_unit = self.task_master.get_work_unit(
+            worker_id, work_spec_name, work_unit_key)
+        ## carry this to overwrite self.worker_id after .register()
+        self._pre_assigned_worker_id = worker_id
+
+    def register(self):
+        super(HeadlessWorker, self).register()
+        self.worker_id = self._pre_assigned_worker_id
 
     def run(self):
         logger.critical('HeadlessWorker.run')
@@ -234,12 +175,15 @@ class MultiWorker(Worker):
                     slots[i][1] = None
                     
                 if slots[i][0] is None and mode == tm.RUN:
-                    work_unit = tm.get_work(available_gb=available_gb)
+                    worker_id = uuid.uuid4().hex
+                    work_unit = tm.get_work(worker_id, available_gb=available_gb)
                     logger.info('tm.get_work provided: %r' % work_unit)
                     async_result = pool.apply_async(
                         run_worker, 
                         (HeadlessWorker, tm.registry.config, 
-                         work_unit.work_spec_name, work_unit.key))
+                         worker_id, 
+                         work_unit.work_spec_name,
+                         work_unit.key))
                     slots[i] = [async_result, work_unit]
 
             if mode == tm.TERMINATE:

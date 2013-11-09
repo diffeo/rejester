@@ -5,15 +5,21 @@ This software is released under an MIT/X11 open source license.
 
 Copyright 2012-2013 Diffeo, Inc.
 '''
+from __future__ import absolute_import
+from __future__ import division
+import abc
 import uuid
 import time
+import psutil
+import socket
 import logging
 import traceback
+import pkg_resources
 from operator import itemgetter
 
 from rejester._logging import logger
 from rejester._registry import Registry
-from rejester.exceptions import ProgrammerError
+from rejester.exceptions import ProgrammerError, LockError, LostLease, EnvironmentError
 
 
 BUNDLES = 'bundles'
@@ -24,9 +30,76 @@ _FINISHED = '_FINISHED'
 _FAILED = '_FAILED'
 WORKER_STATE_ = 'WORKER_STATE_'
 WORKER_OBSERVED_MODE = 'WORKER_OBSERVED_MODE'
+ACTIVE_LEASES = 'ACTIVE_LEASES'
+
+class Worker(object):
+
+    __metaclass__ = abc.ABCMeta
+
+    def __init__(self, config):
+        self.config = config
+        self.task_master = TaskMaster(config)
+        self.worker_id = None
+        self.lifetime = 300 ## five minutes
+
+    def environment(self):
+        '''
+        raw data about worker to support forensics on failed tasks
+        '''
+        env = dict(
+            worker_id = self.worker_id,
+            host = socket.gethostbyaddr(socket.gethostname()),
+            fqdn = socket.getfqdn(),
+            version = pkg_resources.get_distribution("rejester").version, # pylint: disable=E1103
+            working_set = [(dist.key, dist.version) for dist in pkg_resources.WorkingSet()], # pylint: disable=E1103
+            #config_hash = self.config['config_hash'],
+            #config_json = self.config['config_json'],
+            memory = psutil.phymem_usage(),
+        )
+        return env
+
+    def register(self):
+        '''record the availability of this worker and get a unique identifer
+        '''
+        if self.worker_id:
+            raise ProgrammerError('Worker.register cannot be called again without first calling unregister; it is not idempotent')
+        self.worker_id = uuid.uuid4().hex
+        self.heartbeat()
+        return self.worker_id
+
+    def unregister(self):
+        '''remove this worker from the list of available workers
+        ''' 
+        with self.task_master.registry.lock() as session:
+            session.delete(WORKER_STATE_ + self.worker_id)
+            session.popmany(WORKER_OBSERVED_MODE, self.worker_id)
+        self.worker_id = None
+
+    def heartbeat(self):
+        '''record the current worker state in the registry and also the
+        observed mode and return it
+
+        :returns mode:
+        ''' 
+        mode = self.task_master.get_mode()
+        with self.task_master.registry.lock() as session:
+            session.set(WORKER_OBSERVED_MODE, self.worker_id, mode,
+                        priority=time.time() + self.lifetime)
+            session.update(WORKER_STATE_ + self.worker_id, self.environment(), 
+                           expire=self.lifetime)
+        logger.info('worker observed mode=%r', mode)
+        return mode
+
+    @abc.abstractmethod
+    def run(self):
+        return
+
 
 class WorkUnit(object):
-    def __init__(self, registry, work_spec_name, key, data):
+    def __init__(self, registry, work_spec_name, key, data, worker_id=None):
+        if not worker_id:
+            raise ProgrammerError('must specify a worker_id, not: %r' % worker_id)
+        self.worker_id = worker_id
         self.registry = registry
         self.work_spec_name = work_spec_name
         self.key = key
@@ -65,15 +138,26 @@ class WorkUnit(object):
         '''reset the task lease by incrementing lease_time.  Default is to put
         it five minutes ahead of now.  Setting lease_time<0 will drop
         the lease.
+
+        If the worker waited too long since the previous call to
+        update and another worker has taken this WorkUnit, then this
+        raises rejester.exceptions.LostLease
         '''
         if self.finished:
-            raise ProgrammerError('cannot update after finishing at task')
+            raise ProgrammerError('cannot .update() after .finish()')
+        if self.failed:
+            raise ProgrammerError('cannot .update() after .fail()')
         with self.registry.lock() as session:
-            session.update(
-                WORK_UNITS_ + self.work_spec_name,
-                {self.key: self.data}, 
-                {self.key: time.time() + lease_time})
+            try:
+                session.update(
+                    WORK_UNITS_ + self.work_spec_name,
+                    {self.key: self.data}, 
+                    priorities={self.key: time.time() + lease_time},
+                    locks={self.key: self.worker_id})
 
+            except EnvironmentError, exc:
+                raise LostLease(exc)
+                
     def finish(self):
         '''move this WorkUnit to finished state
         '''
@@ -218,10 +302,15 @@ class TaskMaster(object):
             session.reset_priorities(WORK_UNITS_ + work_spec_name, 0)
 
     def update_bundle(self, work_spec, work_units, nice=0):
-        '''
-        
+        '''update the work_spec and work_units.  Overwrites any existing
+        work_spec with the same work_spec['name'] and similarly
+        overwrites any WorkUnit with the same work_unit.key
+
+        :param work_units: dict of dicts where the keys are used as
+        WorkUnit.key and the values are used as WorkUnit.data
         '''
         self.validate_work_spec(work_spec)
+        
         work_spec_name = work_spec['name']
         with self.registry.lock(atime=1000) as session:
             session.update(NICE_LEVELS, {work_spec_name: nice})
@@ -240,66 +329,75 @@ class TaskMaster(object):
         with self.registry.lock(atime=1000) as session:
             session.update(NICE_LEVELS, dict(work_spec_name=nice))
 
-    def get_work(self, available_gb=None, lease_time=300):
+    def get_work(self, worker_id, available_gb=None, lease_time=300):
         '''obtain a WorkUnit instance based on available memory for the
         worker process.  
+        
+        :param worker_id: unique identifier string for a worker to
+        which a WorkUnit will be assigned, if available.
 
         :param available_gb: number of gigabytes of RAM available to
         this worker
 
         :param lease_time: how many seconds to lease a WorkUnit
+
         '''
         if not isinstance(available_gb, (int, float)):
-            raise ProgrammerError('must always specify available_gb')
+            raise ProgrammerError('must specify available_gb')
 
-        with self.registry.lock(atime=1000) as session:
+        try: 
+            with self.registry.lock(atime=1000, ltime=10000) as session:
+                ## figure out which work_specs have low nice levels
+                nice_levels = session.pull(NICE_LEVELS)
+                nice_levels = nice_levels.items()
+                nice_levels.sort(key=itemgetter(1))
 
-            ## should do something here, like a loop or greenlet with
-            ## timeout to avoid going past atime without taking action
-            
-            ## figure out which work_specs have low nice levels
-            nice_levels = session.pull(NICE_LEVELS)
-            nice_levels = nice_levels.items()
-            nice_levels.sort(key=itemgetter(1))
+                work_specs = session.pull(WORK_SPECS)
+                for work_spec_name, nice in nice_levels:
+                    self.registry.re_acquire_lock(ltime=10000)
 
-            work_specs = session.pull(WORK_SPECS)
-            for work_spec_name, nice in nice_levels:
+                    ## verify sufficient memory
+                    if available_gb < work_specs[work_spec_name]['min_gb']:
+                        continue
 
-                ## verify sufficient memory
-                if available_gb < work_specs[work_spec_name]['min_gb']:
-                    continue
+                    logger.info('considering %s %s', work_spec_name, nice_levels)
 
-                logger.info('considering %s %s', work_spec_name, nice_levels)
+                    ## try to get a task
+                    _work_unit = session.getitem_reset(
+                        WORK_UNITS_ + work_spec_name,
+                        priority_max=time.time(),
+                        new_priority=time.time() + lease_time,
+                        lock=worker_id,
+                    )
 
-                ## try to get a task
-                _work_unit = session.getitem_reset(
-                    WORK_UNITS_ + work_spec_name,
-                    priority_max=time.time(),
-                    new_priority=time.time() + lease_time,
-                )
+                    if _work_unit:
+                        logger.critical('work unit %r', _work_unit)
+                        return WorkUnit(
+                            self.registry, work_spec_name,
+                            _work_unit[0], _work_unit[1],
+                            worker_id=worker_id,                            
+                        )
 
-                if _work_unit:
-                    return WorkUnit(
-                        self.registry, work_spec_name,
-                        _work_unit[0], _work_unit[1])
+                ## did not find work!
+        except (LockError, EnvironmentError), exc:
+            logger.critical('failed to get work', exc_info=True)
+            return
 
-            ## did not find work!
-
-
-    def get_work_unit(self, work_spec_name, work_unit_key):
-        with self.registry.lock(atime=1000) as session:
-            ## try to get a task
-            work_unit_value = session.get(
-                WORK_UNITS_ + work_spec_name,
-                work_unit_key
-            )
-
-            if not work_unit_value:
-                raise KeyError('work_unit_key=%r not found in %r' 
-                               % (work_unit_key, work_spec_name))
-
+    def get_work_unit(self, worker_id, work_spec_name, work_unit_key):
+        with self.registry.lock(atime=1000, ltime=10000) as session:
+            #assigned_work_unit_key = session.get_1to1(
+            #    WORK_UNITS_ + work_spec_name + '_locks',
+            #    worker_id)
+            #if not assigned_work_unit_key == work_unit_key:
+            #    raise EnvironmentError('assigned_work_unit_key=%r != %'
+            #                           % (assigned_work_unit_key, work_unit_key))
+            work_unit_data = session.get(
+                        WORK_UNITS_ + work_spec_name,
+                        work_unit_key)
             return WorkUnit(
                 self.registry, work_spec_name,
-                work_unit_key, work_unit_value)
+                work_unit_key, work_unit_data,
+                worker_id=worker_id,                            
+            )
 
-
+             

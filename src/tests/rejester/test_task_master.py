@@ -1,5 +1,9 @@
 '''
+http://github.com/diffeo/rejester
 
+This software is released under an MIT/X11 open source license.
+
+Copyright 2012-2013 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 from __future__ import division
@@ -12,7 +16,7 @@ import rejester
 from rejester import TaskMaster
 from rejester._logging import logger
 from rejester._task_master import WORK_UNITS_, _FINISHED
-from rejester.exceptions import PriorityRangeEmpty
+from rejester.exceptions import PriorityRangeEmpty, LostLease
 
 from tests.rejester.make_namespace_string import make_namespace_string
 
@@ -46,28 +50,26 @@ def task_master(request):
     return task_master
 
 
-def test_task_master_basic_interface(task_master):
-    '''
-    '''
-    work_spec = dict(
-        name = 'tbundle',
-        desc = 'a test work bundle',
-        min_gb = 8,
-        config = dict(many='', params=''),
-        module = 'tests.rejester.test_workers',
-        run_function = 'work_program',
-        terminate_function = 'work_program',
-    )
+work_spec = dict(
+    name = 'tbundle',
+    desc = 'a test work bundle',
+    min_gb = 8,
+    config = dict(many='', params=''),
+    module = 'tests.rejester.test_workers',
+    run_function = 'work_program',
+    terminate_function = 'work_program',
+)
 
+def test_task_master_basic_interface(task_master):
     work_units = dict(foo={}, bar={})
     task_master.update_bundle(work_spec, work_units)
 
     assert task_master.registry.pull(WORK_UNITS_ + work_spec['name'])
 
     ## check that we ccannot get a task with memory below min_gb
-    assert task_master.get_work(available_gb=3) == None
+    assert task_master.get_work('fake_worker_id', available_gb=3) == None
 
-    work_unit = task_master.get_work(available_gb=13)
+    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
     assert work_unit.key in work_units
 
     work_unit.data['status'] = 10
@@ -82,26 +84,15 @@ def test_task_master_basic_interface(task_master):
 
     assert 'status' in task_master.inspect_work_unit(work_spec['name'], work_unit.key)
 
-def test_task_master_reset_all(task_master):
-    '''
-    '''
-    work_spec = dict(
-        name = 'tbundle',
-        desc = 'a test work bundle',
-        min_gb = 8,
-        config = dict(many='', params=''),
-        module = 'tests.rejester.test_workers',
-        run_function = 'work_program',
-        terminate_function = 'work_program',
-    )
 
+def test_task_master_reset_all(task_master):
     work_units = dict(foo={}, bar={})
     task_master.update_bundle(work_spec, work_units)
     assert task_master.num_finished(work_spec['name']) == 0
     assert task_master.num_pending(work_spec['name']) == 0
     assert task_master.num_available(work_spec['name']) == 2
 
-    work_unit = task_master.get_work(available_gb=13)
+    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
     work_unit.data['status'] = 10
     assert task_master.num_finished(work_spec['name']) == 0
     assert task_master.num_available(work_spec['name']) == 1
@@ -127,22 +118,32 @@ def test_task_master_reset_all(task_master):
         with task_master.registry.lock() as session:
             session.popitem(WORK_UNITS_ + work_spec['name'], priority_max=-1)
 
-    
+
+def test_task_master_lost_lease(task_master):
+    '''test that waiting too long to renew a lease allows another worker
+    to get the lease and leads to LostLease exception in the worker
+    that waited too long.
+    '''
+    work_units = dict(task_key_42=dict(data='hello'))
+    task_master.update_bundle(work_spec, work_units)
+
+    ## lease a WorkUnit with very short lease_time
+    work_unit1 = task_master.get_work('fake_worker_id1', available_gb=13, lease_time=1)
+    time.sleep(2)
+    work_unit2 = task_master.get_work('fake_worker_id2', available_gb=13, lease_time=10)
+
+    assert work_unit1.key == work_unit2.key
+    assert work_unit1.worker_id == 'fake_worker_id1'
+    assert work_unit2.worker_id == 'fake_worker_id2'
+
+    with pytest.raises(LostLease):
+        work_unit1.update()
+
+
 @pytest.mark.performance
 def test_task_master_throughput(task_master):
+    '''exercises TaskMaster by pumping a million records through it
     '''
-    '''
-    ## 1KB sized work_spec config
-    work_spec = dict(
-        name = 'tbundle',
-        desc = 'a test work bundle',
-        min_gb = 8,
-        config = dict(many=' ' * 2**10, params=''),
-        module = 'tests.rejester.test_workers',
-        exec_function = 'work_program',
-        shutdown_function = 'work_program',
-    )
-
     num_units = 10**6
     work_units = {str(x): {str(x): ' ' * 30} for x in xrange(num_units)}
 
@@ -154,5 +155,5 @@ def test_task_master_throughput(task_master):
 
     assert len(task_master.registry.pull(WORK_UNITS_ + work_spec['name'])) == num_units
 
-    work_unit = task_master.get_work(available_gb=13)
+    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
     assert work_unit.key in work_units
