@@ -36,81 +36,9 @@ def run_worker(worker_class, *args, **kwargs):
         raise
 
 
-class BlockingWorker(Worker):
-    '''waits for the rejester to transition to RUN, obtains a WorkUnit and
-    executes it until the rejester transitions to IDLE or TERMINATE.
-    Blocks on calls to WorkUnit.{execute,shutdown}
-    '''
-
-    def __init__(self, config, available_gb):
-        super(BlockingWorker, self).__init__(config)
-        self.available_gb = available_gb
-        self.work_unit = None
-
-    def run(self):
-        logger.critical('worker starting')
-        while 1:
-            mode = self.heartbeat()
-
-            if mode in [self.task_master.IDLE, self.task_master.TERMINATE] and self.work_unit:
-                self.work_unit.terminate()
-
-            if mode == self.task_master.TERMINATE:
-                break
-
-            if mode == self.task_master.RUN:
-                if not self.work_unit:
-                    self.work_unit = self.task_master.get_work(
-                        self.worker_id, self.available_gb)
-                if  self.work_unit:
-                    ## this call will block the worker, so that it
-                    ## fails to call heartbeat as often as it should
-                    self.work_unit.run()
-                else:
-                    time.sleep(1)
-
-
-class GreenletWorker(Worker):
-    '''Similar to BlockingWorker but uses Greenlet co-routines to allow
-    the execute function to periodically yield to the update function
-    to maintain the lease.
-    '''
-    def __init__(self, config, available_gb):
-        super(BlockingWorker, self).__init__(config)
-        self.available_gb = available_gb
-        self.work_unit = None
-        self.greenlet = None
-
-    def run(self):
-        logger.critical('worker starting')
-        while 1:
-            mode = self.task_master.get_mode()
-            logger.info('worker observed mode=%r', mode)
-
-            if mode == self.task_master.IDLE:
-                if  self.work_unit:
-                    self.work_unit.terminate()
-
-            if mode == self.task_master.TERMINATE:
-                if  self.work_unit:
-                    self.work_unit.terminate()
-                if  self.greenlet:
-                    self.greenlet.kill(block=False)
-                    self.greenlet.join()
-                break
-
-            if mode == self.task_master.RUN:
-                if not self.work_unit:
-                    self.work_unit = self.task_master.get_work(self.worker_id)
-                if self.work_unit and not self.greenlet:
-                    self.greenlet = gevent.spawn(self.work_unit.run)
-
-            gevent.sleep(random.uniform(1,5))
-
-
 class HeadlessWorker(Worker):
-    '''Unlike BlockingWorker and GreenletWorker, this expects to receive a
-    WorkUnit from its parent process, which is running MultiWorker
+    '''This expects to receive a WorkUnit from its parent process, which
+    is running MultiWorker.
     '''
 
     def __init__(self, config, worker_id, work_spec_name, work_unit_key):
@@ -143,7 +71,7 @@ class MultiWorker(Worker):
     processes.
     '''
     def run(self):
-        tm = TaskMaster(self.config)
+        tm = self.task_master
         num_workers = multiprocessing.cpu_count()
         mem = psutil.phymem_usage()
         available_gb = float(mem.free) / num_workers
@@ -178,14 +106,15 @@ class MultiWorker(Worker):
                 if slots[i][0] is None and mode == tm.RUN:
                     worker_id = uuid.uuid4().hex
                     work_unit = tm.get_work(worker_id, available_gb=available_gb)
-                    logger.info('tm.get_work provided: %r' % work_unit)
-                    async_result = pool.apply_async(
-                        run_worker, 
-                        (HeadlessWorker, tm.registry.config, 
-                         worker_id, 
-                         work_unit.work_spec_name,
-                         work_unit.key))
-                    slots[i] = [async_result, work_unit]
+                    logger.info('tm.get_work provided: %r', work_unit)
+                    if work_unit is not None:
+                        async_result = pool.apply_async(
+                            run_worker, 
+                            (HeadlessWorker, tm.registry.config, 
+                             worker_id, 
+                             work_unit.work_spec_name,
+                             work_unit.key))
+                        slots[i] = [async_result, work_unit]
 
             if mode == tm.TERMINATE:
                 num_waiting = sum(map(int, map(bool, map(itemgetter(0), slots))))

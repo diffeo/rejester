@@ -11,12 +11,13 @@ import os
 import sys
 import time
 import yaml
+import logging
 import pytest
 import rejester
 from rejester import TaskMaster
 from rejester._logging import logger
 from rejester._task_master import WORK_UNITS_, _FINISHED
-from rejester.exceptions import PriorityRangeEmpty, LostLease
+from rejester.exceptions import LostLease
 
 from tests.rejester.make_namespace_string import make_namespace_string
 
@@ -38,11 +39,14 @@ def task_master(request):
     config['second_namespace'] = config['namespace'] + '_second'
 
     def fin():
+        logging.info('test_task_master finalizer cleaning up namespace %r and %r', config.get('namespace'), config.get('second_namespace'))
         task_master = TaskMaster(config)
         task_master.registry.delete_namespace()
+        logging.info('deleted %r', config.get('namespace'))
         config['namespace'] = config['second_namespace']
         task_master = TaskMaster(config)
         task_master.registry.delete_namespace()
+        logging.info('deleted %r', config.get('namespace'))
         
     request.addfinalizer(fin)
 
@@ -114,9 +118,8 @@ def test_task_master_reset_all(task_master):
     assert task_master.num_pending(work_spec['name']) == 0
 
     assert len(task_master.registry.pull(WORK_UNITS_ + work_spec['name'])) == 2
-    with pytest.raises(PriorityRangeEmpty):
-        with task_master.registry.lock() as session:
-            session.popitem(WORK_UNITS_ + work_spec['name'], priority_max=-1)
+    with task_master.registry.lock() as session:
+        assert session.popitem(WORK_UNITS_ + work_spec['name'], priority_max=-1) is None
 
 
 def test_task_master_lost_lease(task_master):

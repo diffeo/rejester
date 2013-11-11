@@ -6,16 +6,19 @@ Copyright 2012-2013 Diffeo, Inc.
 import os
 import copy
 import time
+import logging
 import rejester
 import multiprocessing
-from rejester.workers import run_worker, BlockingWorker, GreenletWorker, MultiWorker
+from rejester.workers import run_worker, MultiWorker
 from rejester._logging import logger
 
 from tests.rejester.test_task_master import task_master  ## a fixture that cleans up
 
+import pytest
+
 
 def test_task_register(task_master):
-    worker = BlockingWorker(task_master.registry.config, 10)
+    worker = MultiWorker(task_master.registry.config)
     worker_id = worker.register()
     assert worker_id in task_master.workers()
     worker.unregister()
@@ -30,7 +33,7 @@ def work_program(work_unit):
     ## of using work_unit.registry
     config = work_unit.data['config']
     task_master = rejester.TaskMaster(config)
-    time.sleep(3)
+    time.sleep(15)
 
 def work_program_broken(work_unit):
     logger.critical('executing "broken" work_unit')
@@ -52,61 +55,6 @@ work_spec = dict(
     run_function = 'work_program',
     terminate_function = 'work_program',
 )
-
-def test_task_master_manage_workers(task_master):
-    num_units = 10
-    num_workers = 10
-    work_units = {str(x): dict(config=task_master.registry.config) 
-                  for x in xrange(num_units)}
-
-    task_master.update_bundle(work_spec, work_units)
-
-    task_master.set_mode(task_master.RUN)
-
-    workers = multiprocessing.Pool(num_workers, maxtasksperchild=1)
-    results = []
-    for x in range(num_workers):
-        results.append(
-            ## could use GreenletWorker here, just slower.  Both risk
-            ## being blocked by a non-cooperative work_program...
-            workers.apply_async(
-                run_worker, (BlockingWorker, task_master.registry.config, 9)))
-        ## "9" is the available_gb hard coded for this test
-    workers.close()
-    
-    start = time.time()
-    max_test_time = 60
-    already_set_idle = False
-    already_set_terminate = False
-    while results and ((time.time() - start) < max_test_time):
-
-        for res in results:
-            try:
-                ## raises exceptions from children processes
-                res.get(0)
-            except multiprocessing.TimeoutError:
-                results.remove(res)
-
-        modes = task_master.mode_counts()
-        logger.critical(modes)
-
-        if modes[task_master.RUN] == num_workers:
-            task_master.idle_all_workers()
-            already_set_idle = True
-
-        if modes[task_master.IDLE] == num_workers:
-            assert already_set_idle
-            logger.critical('setting mode to TERMINATE')
-            task_master.set_mode(task_master.TERMINATE)
-            already_set_terminate = True
-
-        time.sleep(1)
-
-    if not (already_set_terminate and already_set_idle):
-        raise Exception('timed out after %d seconds' % (time.time() - start))
-
-    workers.join()
-    logger.info('finished running %d worker processes' % num_workers)
 
 
 def test_task_master_multi_worker(task_master):

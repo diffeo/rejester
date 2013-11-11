@@ -20,7 +20,7 @@ from functools import wraps
 from collections import defaultdict
 
 from rejester.exceptions import EnvironmentError, LockError, \
-    PriorityRangeEmpty, ProgrammerError
+    ProgrammerError
 
 logger = logging.getLogger('rejester.Registry')
 
@@ -425,7 +425,7 @@ since the server is busy.
         ):
         '''D.getitem_reset() -> (key, value), return some pair that has a
         priority that satisfies the priority_min/max constraint; but
-        raise PriorityRangeEmpty if that range is empty.
+        return None if that range is empty.
 
         (key, value) stays in the dictionary and is assigned new_priority
         '''
@@ -474,7 +474,7 @@ since the server is busy.
                 'Registry failed to return an item from %s' % dict_name)
 
         if key_value == []:
-            raise PriorityRangeEmpty()
+            return None
 
         return self._decode(key_value[0]), self._decode(key_value[1])
 
@@ -519,7 +519,7 @@ since the server is busy.
                 'Registry failed to return an item from %s' % dict_name)
 
         if key_value == []:
-            raise PriorityRangeEmpty()
+            return None
 
         return self._decode(key_value[0]), self._decode(key_value[1])
 
@@ -567,7 +567,7 @@ since the server is busy.
                               )
 
         if key_value == []:
-            raise PriorityRangeEmpty()
+            return None
 
         if None in key_value or key_value == -1:
             raise KeyError(

@@ -108,10 +108,9 @@ class WorkUnit(object):
         self.finished = False
         self.failed = False
         self.spec = self.registry.get(WORK_SPECS, self.work_spec_name)
+        funclist = filter(None, (self.spec.get('run_function'), self.spec.get('terminate_function')))
         self.module = __import__(
-            self.spec['module'], globals(), (), 
-            [self.spec['run_function'], 
-             self.spec['terminate_function']], -1)
+            self.spec['module'], globals(), (), funclist, -1)
 
     def __repr__(self):
         return self.key
@@ -129,7 +128,14 @@ class WorkUnit(object):
         '''shutdown this WorkUnit using the function specified in its
         work_spec.  Is called multiple times.
         '''
+        terminate_function_name = self.spec.get('terminate_function')
+        if not terminate_function_name:
+            logging.error('tried to terminate WorkUnit(%r) but no function name', self.key)
+            return None
         terminate_function = getattr(self.module, self.spec['terminate_function'])
+        if not terminate_function:
+            logging.error('tried to terminate WorkUnit(%r) but no function %s in module %r', self.key, terminate_function_name, self.module.__name__)
+            return None
         ret_val = terminate_function(self)
         self.update(lease_time=-10)
         logger.critical('called workunit.terminate()')
@@ -380,9 +386,10 @@ class TaskMaster(object):
                         )
 
                 ## did not find work!
+            return None
         except (LockError, EnvironmentError), exc:
             logger.critical('failed to get work', exc_info=True)
-            return
+            return None
 
     def get_assigned_work_unit(
             self, worker_id, work_spec_name, work_unit_key,
