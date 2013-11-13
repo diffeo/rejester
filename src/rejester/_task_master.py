@@ -97,7 +97,7 @@ class Worker(object):
 
 
 class WorkUnit(object):
-    def __init__(self, registry, work_spec_name, key, data, worker_id=None):
+    def __init__(self, registry, work_spec_name, key, data, worker_id=None, expires=None):
         if not worker_id:
             raise ProgrammerError('must specify a worker_id, not: %r' % worker_id)
         self.worker_id = worker_id
@@ -107,13 +107,29 @@ class WorkUnit(object):
         self.data = data
         self.finished = False
         self.failed = False
-        self.spec = self.registry.get(WORK_SPECS, self.work_spec_name)
-        funclist = filter(None, (self.spec.get('run_function'), self.spec.get('terminate_function')))
-        self.module = __import__(
-            self.spec['module'], globals(), (), funclist, -1)
+        self.expires = expires  # time.time() when lease expires
+        self._spec_cache = None  # storage for lazy getter property
+        self._module_cache = None  # storage for lazy getter property
 
     def __repr__(self):
         return self.key
+
+    # lazy caching getter for work spec
+    @property
+    def spec(self):
+        if self._spec_cache is None:
+            self._spec_cache = self.registry.get(WORK_SPECS, self.work_spec_name)
+        return self._spec_cache
+
+    # lazy caching getter for module
+    @property
+    def module(self):
+        if self._module_cache is None:
+            funclist = filter(None, (self.spec.get('run_function'), self.spec.get('terminate_function')))
+            if funclist:
+                self._module_cache = __import__(
+                    self.spec['module'], globals(), (), funclist, -1)
+        return self._module_cache
 
     def run(self):
         '''execute this WorkUnit using the function specified in its
@@ -155,11 +171,18 @@ class WorkUnit(object):
         if self.failed:
             raise ProgrammerError('cannot .update() after .fail()')
         with self.registry.lock() as session:
+            if self.finished:
+                logger.debug('WorkUnit(%r) became finished while waiting for lock to update', self.key)
+                return
+            if self.failed:
+                logger.debug('WorkUnit(%r) became failed while waiting for lock to update', self.key)
+                return
             try:
+                self.expires = time.time() + lease_time
                 session.update(
                     WORK_UNITS_ + self.work_spec_name,
                     {self.key: self.data}, 
-                    priorities={self.key: time.time() + lease_time},
+                    priorities={self.key: self.expires},
                     locks={self.key: self.worker_id})
 
             except EnvironmentError, exc:
@@ -168,9 +191,11 @@ class WorkUnit(object):
     def finish(self):
         '''move this WorkUnit to finished state
         '''
-        if self.finished:
+        if self.finished or self.failed:
             return
         with self.registry.lock() as session:
+            if self.finished or self.failed:
+                return
             session.move(
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FINISHED,
@@ -181,11 +206,13 @@ class WorkUnit(object):
         '''move this WorkUnit to failed state and record info about the
         worker
         '''
-        if self.failed:
+        if self.failed or self.finished:
             return
         self.data['traceback'] = exc and traceback.format_exc(exc) or exc
         #self.data['worker_state'] = self.worker_state
         with self.registry.lock() as session:
+            if self.finished or self.failed:
+                return
             session.move(
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FAILED,
@@ -349,8 +376,12 @@ class TaskMaster(object):
         :param lease_time: how many seconds to lease a WorkUnit
 
         '''
+        start = time.time()
+
         if not isinstance(available_gb, (int, float)):
             raise ProgrammerError('must specify available_gb')
+
+        work_unit = None
 
         try: 
             with self.registry.lock(atime=1000, ltime=10000) as session:
@@ -370,26 +401,28 @@ class TaskMaster(object):
                     logger.info('considering %s %s', work_spec_name, nice_levels)
 
                     ## try to get a task
+                    wu_expires = time.time() + lease_time
                     _work_unit = session.getitem_reset(
                         WORK_UNITS_ + work_spec_name,
                         priority_max=time.time(),
-                        new_priority=time.time() + lease_time,
+                        new_priority=wu_expires,
                         lock=worker_id,
                     )
 
                     if _work_unit:
                         logger.critical('work unit %r', _work_unit)
-                        return WorkUnit(
+                        work_unit = WorkUnit(
                             self.registry, work_spec_name,
                             _work_unit[0], _work_unit[1],
-                            worker_id=worker_id,                            
+                            worker_id=worker_id,
+                            expires=wu_expires,
                         )
 
-                ## did not find work!
-            return None
         except (LockError, EnvironmentError), exc:
             logger.critical('failed to get work', exc_info=True)
-            return None
+
+        logger.debug('get_work %s in %.3f', work_unit is not None, time.time() - start)
+        return work_unit
 
     def get_assigned_work_unit(
             self, worker_id, work_spec_name, work_unit_key,

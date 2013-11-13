@@ -300,7 +300,7 @@ since the server is busy.
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             for i = 3, #ARGV, 4  do
-                if ARGV[i+3] ~= '' then
+                if ARGV[i+3] ~= 'j:""' then
                     local curr_lock = redis.call("hget",  KEYS[2] .. "_locks", ARGV[i])                    
                     if curr_lock and curr_lock ~= ARGV[i+3] then
                         return {-1, ARGV[i], curr_lock, ARGV[i+3]}
@@ -334,6 +334,7 @@ since the server is busy.
             items.append(self._encode(locks[key]))
 
         conn = redis.Redis(connection_pool=self.pool)
+        #logger.debug('update %r %r', dict_name, items)
         res = conn.eval(script, 2, self._lock_name, dict_name, 
                         self._session_lock_identifier, expire, 
                         *items)
@@ -614,6 +615,7 @@ since the server is busy.
 
         conn = redis.Redis(connection_pool=self.pool)
 
+        #logger.debug('move %r %r %r', from_dict, to_dict, items)
         num_moved = conn.eval(script, 3, self._lock_name, 
                               self._namespace(from_dict), 
                               self._namespace(to_dict), 
