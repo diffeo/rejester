@@ -118,7 +118,7 @@ setup(
         'epydoc',
     ],
     install_requires=[
-        'yaml',
+        'pyyaml',
         'redis',
         'psutils',
     ],
