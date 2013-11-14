@@ -118,9 +118,10 @@ setup(
         'epydoc',
     ],
     install_requires=[
-        'yaml',
+        'gevent',
+        'pyyaml',
         'redis',
-        'psutils',
+        'psutil',
     ],
     data_files=[
         ('rejester/examples', recursive_glob('src/examples', '*.*')),
