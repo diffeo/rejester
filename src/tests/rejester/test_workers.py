@@ -26,17 +26,17 @@ def test_task_register(task_master):
 
 
 def work_program(work_unit):
-    logger.critical('executing work_unit')
-
     ## just to show that this works, we get the config from the data
     ## and *reconnect* to the registry with a second instances instead
     ## of using work_unit.registry
     config = work_unit.data['config']
+    sleeptime = float(work_unit.data.get('sleep', 9.0))
     task_master = rejester.TaskMaster(config)
-    time.sleep(15)
+    logger.info('executing work_unit %r ... %s', work_unit.key, sleeptime)
+    time.sleep(sleeptime)  # pretend to work
 
 def work_program_broken(work_unit):
-    logger.critical('executing "broken" work_unit')
+    logger.info('executing "broken" work_unit %r', work_unit.key)
 
     ## just to show that this works, we get the config from the data
     ## and *reconnect* to the registry with a second instances instead
@@ -173,7 +173,8 @@ def test_task_master_multi_worker_failed_task(task_master):
 def test_task_master_multi_worker_multi_update(task_master):
     num_units = 10
     num_units_cursor = 0
-    work_units = {'key' + str(x): dict(config=task_master.registry.config)
+    workduration = 2.0
+    work_units = {'key' + str(x): dict(config=task_master.registry.config, sleep=workduration)
                   for x in xrange(num_units_cursor, num_units_cursor + num_units)}
     num_units_cursor += num_units
     task_master.update_bundle(work_spec, work_units)
@@ -250,7 +251,8 @@ def test_task_master_multi_worker_multi_update(task_master):
 def test_task_master_multi_worker_multi_update_miniwait(task_master):
     num_units = 10
     num_units_cursor = 0
-    work_units = {'key' + str(x): dict(config=task_master.registry.config)
+    workduration = 2.0
+    work_units = {'key' + str(x): dict(config=task_master.registry.config, sleep=workduration)
                   for x in xrange(num_units_cursor, num_units_cursor + num_units)}
     num_units_cursor += num_units
     task_master.update_bundle(work_spec, work_units)
@@ -270,10 +272,10 @@ def test_task_master_multi_worker_multi_update_miniwait(task_master):
     p.start()
 
     # just wait a little bit, presumably some set of things are running
-    time.sleep(2)
+    time.sleep(1)
 
     # add more work
-    work_units2 = {'key' + str(x): dict(config=task_master.registry.config)
+    work_units2 = {'key' + str(x): dict(config=task_master.registry.config, sleep=workduration)
                   for x in xrange(num_units_cursor, num_units_cursor + num_units)}
     task_master.update_bundle(work_spec, work_units2)
 

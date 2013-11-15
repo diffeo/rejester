@@ -13,7 +13,6 @@ import redis
 import random
 import socket
 import atexit
-import logging
 import contextlib
 from uuid import UUID
 from functools import wraps
@@ -22,7 +21,9 @@ from collections import defaultdict
 from rejester.exceptions import EnvironmentError, LockError, \
     ProgrammerError
 
-logger = logging.getLogger('rejester.Registry')
+from ._logging import logger as relogger
+logger = relogger.getChild('Registry')
+
 
 class Registry(object):
     '''provides a centralized storage mechanism for dictionaries,

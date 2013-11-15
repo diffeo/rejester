@@ -5,12 +5,13 @@ Copyright 2012-2013 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 import os
+import sys
 import time
 import uuid
 import gevent
 import psutil
 import random
-import logging
+import Queue
 import multiprocessing
 from signal import signal, SIGHUP, SIGTERM, SIGABRT
 from operator import itemgetter
@@ -18,7 +19,8 @@ from collections import deque
 from rejester._task_master import TaskMaster, Worker, \
     WORKER_OBSERVED_MODE, WORKER_STATE_
 
-logger = logging.getLogger('rejester.workers')
+from ._logging import logger as relogger
+logger = relogger.getChild('workers')
 
 def run_worker(worker_class, *args, **kwargs):
     '''multiprocessing cannot apply_async to a class constructor, even if
@@ -70,51 +72,105 @@ class MultiWorker(Worker):
     TaskMaster interactions and sends WorkUnit instances to child
     processes.
     '''
+    def __init__(self, config):
+        super(MultiWorker, self).__init__(config)
+        self._event_queue = multiprocessing.Queue()
+        self.pool = None
+
+    _available_gb = None
+
+    @classmethod
+    def available_gb(cls):
+        if cls._available_gb is None:
+            mem = psutil.phymem_usage()
+            cls._available_gb = float(mem.free) / multiprocessing.cpu_count()
+        return cls._available_gb
+
+    def _finish_callback(self, *args):
+        # We don't actually get anything useful from the work call, so
+        # just post an event that causes us to wake up and poll all
+        # the slots.
+        logger.debug('FINISH!')
+        self._event_queue.put(True)
+
+    def _poll_async_result(self, async_result, work_unit, do_update=True):
+        if async_result is None:
+            return
+        assert work_unit is not None
+        if not async_result.ready():
+            if do_update:
+                logger.debug('not ready %r, update', work_unit.key)
+                work_unit.update()
+            return
+        try:
+            async_result.get(0)
+        except multiprocessing.TimeoutError:
+            if do_update:
+                logger.debug('get timeout update %r', work_unit.key)
+                work_unit.update()
+            return
+        except Exception, exc:
+            logger.critical('trapped child exception', exc_info=True)
+            work_unit.fail(exc)
+        else:
+            ## if it gets here, slot should always be finished
+            assert async_result.ready()
+            work_unit.finish()
+        ## either failed or finished
+        assert work_unit.failed or work_unit.finished
+
+    def _get_and_start_work(self):
+        "return (async_result, work_unit) or (None, None)"
+        worker_id = uuid.uuid4().hex
+        work_unit = self.task_master.get_work(worker_id, available_gb=self.available_gb())
+        logger.info('tm.get_work provided: %r', work_unit)
+        if work_unit is None:
+            return None, None
+        async_result = self.pool.apply_async(
+            run_worker,
+            (HeadlessWorker, self.task_master.registry.config,
+             worker_id,
+             work_unit.work_spec_name,
+             work_unit.key),
+            callback=self._finish_callback)
+        return async_result, work_unit
+
+    def _poll_slots(self, slots, mode=None, do_update=False):
+        hasWork = True
+        for i in xrange(len(slots)):
+            async_result, work_unit = slots[i]
+            if (async_result is not None) and (work_unit is not None):
+                self._poll_async_result(async_result, work_unit, do_update=do_update)
+                if work_unit.failed or work_unit.finished:
+                    slots[i] = (None, None)
+            if (slots[i][0] is None) and (mode == self.task_master.RUN):
+                if hasWork:
+                    slots[i] = self._get_and_start_work()
+                    if slots[i][0] is None:
+                        # If we fail to get work, don't hammer the
+                        # taskmaster with requests for work. Wait
+                        # until after a sleep and the next _poll_slots
+                        # cycle.
+                        hasWork = False
+
     def run(self):
         tm = self.task_master
         num_workers = multiprocessing.cpu_count()
-        mem = psutil.phymem_usage()
-        available_gb = float(mem.free) / num_workers
-        pool = multiprocessing.Pool(num_workers, maxtasksperchild=1)
+        if self.pool is None:
+            self.pool = multiprocessing.Pool(num_workers, maxtasksperchild=1)
         ## slots is a fixed-length list of [AsyncRsults, WorkUnit]
         slots = [[None, None]] * num_workers
-        logger.critical('MultiWorker starting')
-        while 1:
+        logger.info('MultiWorker starting with %s workers', num_workers)
+        min_loop_time = 2.0
+        lastFullPoll = time.time()
+        while True:
             mode = self.heartbeat()
-            logger.info('MultiWorker observed mode=%r', mode)
-            for i in xrange(num_workers):
-                if slots[i][0]:
-                    try:
-                        ## raises exceptions from children processes
-                        slots[i][0].get(0)
-                    except multiprocessing.TimeoutError:
-                        ## still in progress
-                        slots[i][1].update()
-                        continue
-                    except Exception, exc:
-                        logger.critical('trapped child exception', exc_info=True)
-                        slots[i][1].fail(exc)
-                    else:
-                        ## if it gets here, slot should always be finished
-                        assert slots[i][0].ready()
-                        slots[i][1].finish()
-                    ## either failed or finished
-                    assert slots[i][1].failed or slots[i][1].finished
-                    slots[i][0] = None
-                    slots[i][1] = None
-                    
-                if slots[i][0] is None and mode == tm.RUN:
-                    worker_id = uuid.uuid4().hex
-                    work_unit = tm.get_work(worker_id, available_gb=available_gb)
-                    logger.info('tm.get_work provided: %r', work_unit)
-                    if work_unit is not None:
-                        async_result = pool.apply_async(
-                            run_worker, 
-                            (HeadlessWorker, tm.registry.config, 
-                             worker_id, 
-                             work_unit.work_spec_name,
-                             work_unit.key))
-                        slots[i] = [async_result, work_unit]
+            now = time.time()
+            should_update = (now - lastFullPoll) > min_loop_time
+            logger.info('MultiWorker observed mode=%r poll update=%s', mode, should_update)
+            self._poll_slots(slots, mode=mode, do_update=should_update)
+            if should_update:
+                lastFullPoll = now
 
             if mode == tm.TERMINATE:
                 num_waiting = sum(map(int, map(bool, map(itemgetter(0), slots))))
@@ -124,6 +180,13 @@ class MultiWorker(Worker):
                 else:
                     logger.info('MultiWorker waiting for %d children to finish', num_waiting)
 
-            time.sleep(random.uniform(1,5))
+            sleepsecs = random.uniform(1,5)
+            sleepstart = time.time()
+            try:
+                self._event_queue.get(block=True, timeout=sleepsecs)
+                logger.debug('woken by event looptime=%s sleeptime=%s', sleepstart - now, time.time() - sleepstart)
+            except Queue.Empty, empty:
+                logger.debug('queue timed out. be exhausting, looptime=%s sleeptime=%s', sleepstart - now, time.time() - sleepstart)
+                # it's cool, timed out, do the loop of checks and stuff.
 
         logger.info('MultiWorker exiting')

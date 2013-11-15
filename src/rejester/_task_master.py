@@ -12,16 +12,15 @@ import uuid
 import time
 import psutil
 import socket
-import logging
 import traceback
 import pkg_resources
 from operator import itemgetter
 
 from rejester._registry import Registry
+from ._logging import logger
 from rejester.exceptions import ProgrammerError, LockError, \
     LostLease, EnvironmentError
 
-logger = logging.getLogger('rejester.TaskMaster')
 
 BUNDLES = 'bundles'
 NICE_LEVELS = 'NICE_LEVELS'
@@ -110,6 +109,7 @@ class WorkUnit(object):
         self.expires = expires  # time.time() when lease expires
         self._spec_cache = None  # storage for lazy getter property
         self._module_cache = None  # storage for lazy getter property
+        logger.debug('WorkUnit init %r', self.key)
 
     def __repr__(self):
         return self.key
@@ -146,11 +146,11 @@ class WorkUnit(object):
         '''
         terminate_function_name = self.spec.get('terminate_function')
         if not terminate_function_name:
-            logging.error('tried to terminate WorkUnit(%r) but no function name', self.key)
+            logger.error('tried to terminate WorkUnit(%r) but no function name', self.key)
             return None
         terminate_function = getattr(self.module, self.spec['terminate_function'])
         if not terminate_function:
-            logging.error('tried to terminate WorkUnit(%r) but no function %s in module %r', self.key, terminate_function_name, self.module.__name__)
+            logger.error('tried to terminate WorkUnit(%r) but no function %s in module %r', self.key, terminate_function_name, self.module.__name__)
             return None
         ret_val = terminate_function(self)
         self.update(lease_time=-10)
@@ -196,6 +196,7 @@ class WorkUnit(object):
         with self.registry.lock() as session:
             if self.finished or self.failed:
                 return
+            logger.debug('WorkUnit finish %r', self.key)
             session.move(
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FINISHED,
@@ -410,7 +411,7 @@ class TaskMaster(object):
                     )
 
                     if _work_unit:
-                        logger.critical('work unit %r', _work_unit)
+                        logger.info('work unit %r', _work_unit)
                         work_unit = WorkUnit(
                             self.registry, work_spec_name,
                             _work_unit[0], _work_unit[1],
