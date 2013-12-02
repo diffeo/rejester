@@ -122,9 +122,15 @@ setup(
         'pyyaml',
         'redis',
         'psutil',
+        'python-daemon',
     ],
     data_files=[
         ('rejester/examples', recursive_glob('src/examples', '*.*')),
     ],
+    entry_points={
+        'console_scripts': [
+            'rejester = rejester.run:main',
+        ]
+    },
     zip_safe=False,  # so we can get into examples
 )
