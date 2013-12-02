@@ -15,7 +15,7 @@ def path(request):
     request.addfinalizer(fin)
     return path
 
-@pytest.xfail
+@pytest.mark.xfail
 def test_run(path):
     p = subprocess.Popen(
         ['rejester', 'run', 'test_namespace', '--pidfile', path],
@@ -38,5 +38,3 @@ def test_run(path):
     pid = open(path).read()
     os.kill(pid, signal.SIGTERM)
     print 'killed', pid
-
-                    
