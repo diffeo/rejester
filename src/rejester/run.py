@@ -15,6 +15,7 @@ import termios
 import logging
 import logging.handlers
 import argparse
+import lockfile
 
 from rejester.workers import run_worker, MultiWorker
 from rejester._logging import logger
@@ -87,14 +88,23 @@ class Manager(object):
 
     def run(self, **kwargs):
         pidfile = kwargs.get('pidfile')
-        handler = logging.handlers.SysLogHandler(address = '/var/log/rejester')
-        logger.addHandler(handler)
-        logger.critical('entering daemon context')
-        #with daemon.DaemonContext(pidfile=pidfile):
-        if 1:
-            open(pidfile).write(os.getpid())
-            logger.critical('inside daemon context')
+        logpath = kwargs.get('logpath')
+        if pidfile:
+            pidfile_lock = lockfile.FileLock(pidfile)
+        else:
+            pidfile_lock = None
+        context = daemon.DaemonContext(pidfile=pidfile_lock)
+        logger.debug('entering daemon context, pidfile=%r', pidfile)
+        with context:
+            if logpath:
+                # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
+                handler = logging.handlers.RotatingFileHandler(logpath, maxBytes=10000000, backupCount=3)
+                logger.addHandler(handler)
+            open(pidfile,'w').write(str(os.getpid()))
+            logger.info('inside daemon context')
             run_worker(MultiWorker, self.config)        
+            logger.info('run_worker exited')
+        logger.debug('exited daemon context, pidfile=%r', pidfile)
 
 
 def main():
@@ -112,6 +122,7 @@ def main():
                         help='path to file with one JSON record per line, each describing a Work Unit')
     parser.add_argument('--loaddata', default=[], action='append', dest='loaddatapaths',
                         help='paths to files with data entities in them [may be repeated]')
+    parser.add_argument('--logpath', default=None)
     args = parser.parse_args()
 
     ## Split actions by comma, and execute them in sequence
