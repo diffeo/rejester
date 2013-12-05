@@ -17,6 +17,7 @@ import logging
 import logging.handlers
 import argparse
 import lockfile
+import traceback
 
 from rejester import TaskMaster
 from rejester.workers import run_worker, MultiWorker
@@ -101,8 +102,7 @@ class Manager(object):
         if do_delete:
             stderr('\nDeleting ...')
             sys.stdout.flush()
-            TreeStorage(self.config['bigtree']).delete_namespace()
-            bigtree.storage.cleanup(self.config['bigtree'])
+            self.task_master.registry.delete_namespace()
             stderr('')
 
         else:
@@ -127,6 +127,10 @@ class Manager(object):
     def run_worker(self, **kwargs):
         pidfile = kwargs.get('pidfile')
         logpath = kwargs.get('logpath')
+        if not os.path.exists(os.path.dirname(logpath)):
+            sys.exit('logpath dir does not exist: %r' % os.path.dirname(logpath))
+        if not os.path.exists(os.path.dirname(pidfile)):
+            sys.exit('pidfile dir does not exist: %r' % os.path.dirname(pidfile))
         if pidfile:
             pidfile_lock = lockfile.FileLock(pidfile)
         else:
@@ -134,16 +138,23 @@ class Manager(object):
         context = daemon.DaemonContext(pidfile=pidfile_lock)
         logger.debug('entering daemon context, pidfile=%r', pidfile)
         with context:
-            if logpath:
-                # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
-                handler = logging.handlers.RotatingFileHandler(
-                    logpath, maxBytes=10000000, backupCount=3)
-                handler.setFormatter(formatter)
-                logger.addHandler(handler)
-            open(pidfile,'w').write(str(os.getpid()))
-            logger.info('inside daemon context')
-            run_worker(MultiWorker, self.config)        
-            logger.info('run_worker exited')
+            try:
+                open(pidfile,'w').write(str(os.getpid()))
+                if logpath:
+                    # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
+                    handler = logging.handlers.RotatingFileHandler(
+                        logpath, maxBytes=10000000, backupCount=3)
+                    handler.setFormatter(formatter)
+                    logger.addHandler(handler)
+                logger.info('inside daemon context')
+                run_worker(MultiWorker, self.config)        
+                logger.info('run_worker exited')
+            except Exception, exc:
+                #catastrophe_log = os.path.join(os.path.dirname(logpath), 'rejester-failure-%d.log' % os.getpid())
+                #catastrophe_log = os.path.join('/tmp', 'rejester-failure-%d.log' % os.getpid())
+                catastrophe_log = os.path.join('/tmp', 'rejester-failure.log')
+                open(catastrophe_log, 'wb').write(traceback.format_exc(exc))
+                raise
         logger.debug('exited daemon context, pidfile=%r', pidfile)
 
 
