@@ -10,6 +10,7 @@ import os
 import sys
 import tty
 import json
+import yaml
 import daemon
 import termios
 import logging
@@ -17,8 +18,9 @@ import logging.handlers
 import argparse
 import lockfile
 
+from rejester import TaskMaster
 from rejester.workers import run_worker, MultiWorker
-from rejester._logging import logger
+from rejester._logging import logger, formatter
 
 def stderr(m, newline='\n'):
     sys.stderr.write(m)
@@ -40,19 +42,42 @@ def getch():
 
 
 class Manager(object):
-    def __init__(self, namespace, registry_addresses):
-        self.config = dict(namespace=namespace,
-                           registry_addresses=registry_addresses)
+    def __init__(self, registry_addresses, app_name, namespace):
+        self.config = dict(
+            app_name=app_name,
+            namespace=namespace,
+            registry_addresses=registry_addresses,
+        )
+        self.task_master = TaskMaster(self.config)
+
+    def _get_work_spec(self, **kwargs):
+        work_spec_path  = kwargs.get('work_spec_path')
+        if not os.path.exists(work_spec_path):
+            sys.exit( 'Path does not exist: %r' % work_spec_path )
+        work_spec = yaml.load(open(work_spec_path))
+        return work_spec
 
     def load(self, **kwargs):
-        if self.args.loaddatapaths:
-            input_paths = self.args.loaddatapaths
-        elif self.args.input == '-':
-            input_paths = sys.stdin
+        '''loads work_units into a namespace for a given work_spec
+        '''
+        work_spec = self._get_work_spec(**kwargs)
+
+        work_units_path = kwargs.get('work_units_path')
+        if work_units_path == '-':
+            work_units_fh = sys.stdin
+        elif work_units_path.endswith('.gz'):
+            work_units_fh = gzip.open(work_units_path)
         else:
-            input_paths = open(self.args.input, 'r')
-        ## all forms of input_paths are iterable
-        #do loading
+            work_units_fh = open(work_units_path)
+        print 'loading work units from %r' % work_units_fh
+        work_units = dict()
+        for line in work_units_fh:
+            work_unit = json.loads(line)
+            work_units.update(work_unit)
+        print 'pushing work units'
+        self.task_master.update_bundle(work_spec, work_units)
+        print 'finished writing %d work units to work_spec=%r' \
+            % (len(work_units), work_spec['name'])
 
     def delete(self, **kwargs):
         'make sure the user means to delete'
@@ -84,9 +109,22 @@ class Manager(object):
             stderr(' ... Aborting.')
 
     def status(self, **kwargs):
-        pass
+        work_spec = self._get_work_spec(**kwargs)
+        print json.dumps(self.task_master.status(work_spec['name']), indent=4, sort_keys=True)
 
-    def run(self, **kwargs):
+    def set_IDLE(self, **kwargs):
+        self.task_master.set_mode(self.task_master.IDLE)
+        print 'set mode to IDLE'
+
+    def set_RUN(self, **kwargs):
+        self.task_master.set_mode(self.task_master.RUN)
+        print 'set mode to RUN'
+
+    def set_TERMINATE(self, **kwargs):
+        self.task_master.set_mode(self.task_master.TERMINATE)
+        print 'set mode to TERMINATE'
+
+    def run_worker(self, **kwargs):
         pidfile = kwargs.get('pidfile')
         logpath = kwargs.get('logpath')
         if pidfile:
@@ -98,7 +136,9 @@ class Manager(object):
         with context:
             if logpath:
                 # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
-                handler = logging.handlers.RotatingFileHandler(logpath, maxBytes=10000000, backupCount=3)
+                handler = logging.handlers.RotatingFileHandler(
+                    logpath, maxBytes=10000000, backupCount=3)
+                handler.setFormatter(formatter)
                 logger.addHandler(handler)
             open(pidfile,'w').write(str(os.getpid()))
             logger.info('inside daemon context')
@@ -111,25 +151,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', help='must be one of: load, delete, status, run')
     parser.add_argument('namespace', help='data namespace in which to execute ACTION')
+    parser.add_argument('--app-name', help='app_name, defaults to "rejester"', default='rejester')
     parser.add_argument('--registry-address', action='append', default=[], dest='registry_addresses',
                         help='specify hostname:port for a registry server')
     parser.add_argument('--pidfile', default=None, help='PID lock file for use with action=run')
     parser.add_argument('-y', '--yes', default=False, action='store_true', dest='assume_yes',
                         help='Assume "yes" and require no input for confirmation questions.')
-    parser.add_argument('-w', '--work-spec', 
+    parser.add_argument('-w', '--work-spec', dest='work_spec_path',
                         help='path to a YAML or JSON file containing a Work Spec')
-    parser.add_argument('-u', '--work-units', default='-',
+    parser.add_argument('-u', '--work-units', default='-', dest='work_units_path',
                         help='path to file with one JSON record per line, each describing a Work Unit')
-    parser.add_argument('--loaddata', default=[], action='append', dest='loaddatapaths',
-                        help='paths to files with data entities in them [may be repeated]')
     parser.add_argument('--logpath', default=None)
     args = parser.parse_args()
 
     ## Split actions by comma, and execute them in sequence
     actions = args.action.split(',')
 
-    logger.critical(actions)
-    print actions
+    #logger.critical(actions)
 
     for action_string in actions:
         if action_string not in Manager.__dict__:
@@ -139,7 +177,7 @@ def main():
         ## default to public testing instance
         args.registry_addresses.append( 'redis.diffeo.com:6379' )
 
-    mgr = Manager(args.namespace, args.registry_addresses)
+    mgr = Manager(args.registry_addresses, args.app_name, args.namespace)
 
     for action_string in actions:
         logger.critical(action_string)

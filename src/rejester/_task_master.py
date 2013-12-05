@@ -112,7 +112,7 @@ class WorkUnit(object):
         logger.debug('WorkUnit init %r', self.key)
 
     def __repr__(self):
-        return self.key
+        return 'WorkUnit(key=%s)' % self.key
 
     # lazy caching getter for work spec
     @property
@@ -315,6 +315,15 @@ class TaskMaster(object):
         return self.num_finished(work_spec_name) + \
                self.num_failed(work_spec_name) + \
                self.registry.len(WORK_UNITS_ + work_spec_name)
+
+    def status(self, work_spec_name):
+        return dict(
+            num_available=self.num_available(work_spec_name),
+            num_pending=self.num_pending(work_spec_name),
+            num_finished=self.num_finished(work_spec_name),
+            num_failed=self.num_failed(work_spec_name),
+            num_tasks=self.num_tasks(work_spec_name),
+            )
 
     def inspect_work_unit(self, work_spec_name, work_unit_key):
         '''

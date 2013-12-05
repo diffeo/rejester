@@ -108,6 +108,7 @@ setup(
         'License :: OSI Approved :: MIT License',  ## MIT/X11 license http://opensource.org/licenses/MIT
     ],
     tests_require=[
+        'pexpect',
         'pytest',
         'ipdb',
         'pytest-cov',

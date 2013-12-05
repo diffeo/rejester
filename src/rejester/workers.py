@@ -22,6 +22,17 @@ from rejester._task_master import TaskMaster, Worker, \
 from ._logging import logger as relogger
 logger = relogger.getChild('workers')
 
+def test_work_program(work_unit):
+    ## just to show that this works, we get the config from the data
+    ## and *reconnect* to the registry with a second instances instead
+    ## of using work_unit.registry
+    config = work_unit.data['config']
+    sleeptime = float(work_unit.data.get('sleep', 9.0))
+    task_master = TaskMaster(config)
+    logger.info('executing work_unit %r ... %s', work_unit.key, sleeptime)
+    time.sleep(sleeptime)  # pretend to work
+    logger.info('finished %r' % work_unit)
+
 def run_worker(worker_class, *args, **kwargs):
     '''multiprocessing cannot apply_async to a class constructor, even if
     the __init__ calls .run(), so this simple wrapper calls
@@ -34,7 +45,7 @@ def run_worker(worker_class, *args, **kwargs):
         worker.run()
         worker.unregister()
     except Exception, exc:
-        logger.critical('worker died!', exc_info=True)
+        logger.critical('worker died! %r', worker_class, exc_info=True)
         raise
 
 
