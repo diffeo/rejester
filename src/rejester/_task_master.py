@@ -127,8 +127,12 @@ class WorkUnit(object):
         if self._module_cache is None:
             funclist = filter(None, (self.spec.get('run_function'), self.spec.get('terminate_function')))
             if funclist:
-                self._module_cache = __import__(
-                    self.spec['module'], globals(), (), funclist, -1)
+                try:
+                    self._module_cache = __import__(
+                        self.spec['module'], globals(), (), funclist, -1)
+                except Exception, exc:
+                    logger.critical('failed to load spec["module"] = %r', self.spec['module'])
+                    raise
         return self._module_cache
 
     def run(self):
