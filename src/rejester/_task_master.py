@@ -339,6 +339,9 @@ class TaskMaster(object):
             if not work_unit_data:
                 work_unit_data = session.get(
                     WORK_UNITS_ + work_spec_name + _FINISHED, work_unit_key)
+            if not work_unit_data:
+                work_unit_data = session.get(
+                    WORK_UNITS_ + work_spec_name + _FAILED, work_unit_key)
             return work_unit_data
 
 
@@ -346,6 +349,8 @@ class TaskMaster(object):
         self.idle_all_workers()
         with self.registry.lock(ltime=10000) as session:
             session.move_all(WORK_UNITS_ + work_spec_name + _FINISHED,
+                             WORK_UNITS_ + work_spec_name)
+            session.move_all(WORK_UNITS_ + work_spec_name + _FAILED,
                              WORK_UNITS_ + work_spec_name)
             session.reset_priorities(WORK_UNITS_ + work_spec_name, 0)
 
