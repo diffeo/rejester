@@ -431,6 +431,7 @@ class TaskMaster(object):
                             worker_id=worker_id,
                             expires=wu_expires,
                         )
+                        break
 
         except (LockError, EnvironmentError), exc:
             logger.critical('failed to get work', exc_info=True)
