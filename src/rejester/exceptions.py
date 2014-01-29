@@ -33,3 +33,6 @@ class LostLease(RejesterException):
 got the WorkItem'''
     pass
 
+class ItemInUseError(RejesterException):
+    '''tried to add an item to a queue that was already in use'''
+    pass
