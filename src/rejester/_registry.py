@@ -3,7 +3,7 @@ http://github.com/diffeo/rejester
 
 This software is released under an MIT/X11 open source license.
 
-Copyright 2012-2013 Diffeo, Inc.
+Copyright 2012-2014 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 import time
@@ -20,12 +20,13 @@ from collections import defaultdict
 
 from rejester.exceptions import EnvironmentError, LockError, \
     ProgrammerError
+from rejester._redis import RedisBase
 
-from ._logging import logger as relogger
+from rejester._logging import logger as relogger
 logger = relogger.getChild('Registry')
 
 
-class Registry(object):
+class Registry(RedisBase):
     '''provides a centralized storage mechanism for dictionaries,
 including atomic operations for moving (key, value) pairs between
 dictionaries, and incrementing counts.
@@ -52,19 +53,8 @@ since the server is busy.
         '''
         Initialize the registry using a config
         '''
-        self.config = config
-        if 'registry_addresses' not in config:
-            raise ProgrammerError('registry_addresses not set')
-        redis_address, redis_port = config['registry_addresses'][0].split(':')
-        redis_port = int(redis_port)
-        self._local_ip = self._ipaddress(redis_address, redis_port)
+        super(Registry, self).__init__(config)
 
-        if 'app_name' not in config:
-            raise ProgrammerError('app_name must be specified to configure Registry')
-
-        self._namespace_str = config['app_name'] + '_' + config['namespace']
-        self.pool = redis.ConnectionPool(host=redis_address, port=redis_port)
-        
         ## populated only when lock is acquired
         self._lock_name = None
         self._session_lock_identifier = None
@@ -74,13 +64,6 @@ since the server is busy.
 
         logger.debug('worker_id=%r  starting up on hostname=%r', 
                      self.worker_id, socket.gethostbyname(socket.gethostname()))
-
-    def _ipaddress(self, host, port):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect((host, port))
-        local_ip = s.getsockname()[0]
-        s.close()
-        return local_ip
 
     def _startup(self):
         conn = redis.Redis(connection_pool=self.pool)
@@ -115,19 +98,6 @@ since the server is busy.
     def _all_workers(self):
         conn = redis.Redis(connection_pool=self.pool)
         return conn.smembers(self._namespace('cur_workers'))
-
-    def delete_namespace(self):
-        '''Remove all keys from the namespace
-
-        '''
-        conn = redis.Redis(connection_pool=self.pool)
-        keys = conn.keys("%s*" % self._namespace_str)
-        if keys:
-            conn.delete(*keys)
-        logger.debug('tearing down %r', self._namespace_str)
-
-    def _namespace(self, name):
-        return "%s_%s" % (self._namespace_str, name)
 
     def _acquire_lock(self, lock_name, identifier, atime=600, ltime=600):
         '''Acquire a lock for a given identifier.  Contend for the lock for
