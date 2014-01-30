@@ -20,7 +20,6 @@ from subprocess import Popen, PIPE
 from rejester._logging import logger
 
 from tests.rejester.test_task_master import task_master  ## a fixture that cleans up
-from tests.rejester.test_run import tmp_dir  ## a fixture that cleans up
 
 ## 1KB sized work_spec config
 work_spec = dict(
@@ -33,24 +32,22 @@ work_spec = dict(
     terminate_function = 'test_work_program',
 )
 
-def test_cli(task_master, tmp_dir):
-    tmpf = tempfile.NamedTemporaryFile(delete=True)
-    tmpf.write(yaml.dump(work_spec))
-    tmpf.flush()
-    assert yaml.load(open(tmpf.name)) == work_spec
-
-    #open('foo.yaml', 'wb').write(yaml.dump(work_spec))
+def test_cli(task_master, tmpdir):
+    tmpf = str(tmpdir.join("work_spec.yaml"))
+    with open(tmpf, 'w') as f:
+        f.write(yaml.dump(work_spec))
+    assert yaml.load(open(tmpf, 'r')) == work_spec
 
     num_units = 11
-    tmpf2 = tempfile.NamedTemporaryFile(delete=True)
-    for x in xrange(num_units):
-        work_unit = json.dumps({'key-%d' % x: dict(sleep=0.2, config=task_master.registry.config)})
-        tmpf2.write(work_unit + '\n')
-    tmpf2.flush()
+    tmpf2 = str(tmpdir.join("work_units.yaml"))
+    with open(tmpf2, 'w') as f:
+        for x in xrange(num_units):
+            work_unit = json.dumps({'key-%d' % x: dict(sleep=0.2, config=task_master.registry.config)})
+            f.write(work_unit + '\n')
 
     namespace = task_master.registry.config['namespace']
     cmd = 'rejester load ' + namespace + ' --app-name rejester_test -u '\
-          + tmpf2.name + ' -w ' + tmpf.name
+          + tmpf2 + ' -w ' + tmpf
     logger.info(cmd)
     child = pexpect.spawn(cmd)
     child.logfile = sys.stdout
@@ -61,7 +58,7 @@ def test_cli(task_master, tmp_dir):
 
     logger.critical(json.dumps(task_master.status(work_spec['name']), indent=4))
 
-    cmd = 'rejester status ' + namespace + ' --app-name rejester_test -w ' + tmpf.name
+    cmd = 'rejester status ' + namespace + ' --app-name rejester_test -w ' + tmpf
     logger.info(cmd)
     p = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True)
     logger.critical(p.stderr.read())
@@ -69,8 +66,8 @@ def test_cli(task_master, tmp_dir):
     child = pexpect.spawn(cmd)
     child.expect('num_available.*%d' % num_units)
 
-    tmp_pid = os.path.join(tmp_dir, 'pid')
-    tmp_log = os.path.join(tmp_dir, 'log')
+    tmp_pid = str(tmpdir.join('pid'))
+    tmp_log = str(tmpdir.join('log'))
     cmd = 'rejester run_worker ' + namespace + ' --app-name rejester_test --logpath '\
           + tmp_log + ' --pidfile ' + tmp_pid
     logger.info(cmd)
