@@ -17,7 +17,6 @@ import time
 import pytest
 
 logger = logging.getLogger(__name__)
-pytest_plugins = 'rejester.support.test'
 
 @pytest.fixture
 def rejester_cli_namespace(request, _rejester_namespace):

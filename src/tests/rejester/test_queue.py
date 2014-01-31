@@ -16,7 +16,6 @@ import pytest
 from rejester.exceptions import ItemInUseError, LostLease
 
 logger = logging.getLogger(__name__)
-pytest_plugins = 'rejester.support.test'
 
 def all_of_queue(queue):
     while True:

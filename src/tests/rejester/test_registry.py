@@ -15,7 +15,6 @@ from rejester import Registry
 from rejester.exceptions import EnvironmentError
 
 logger = logging.getLogger(__name__)
-pytest_plugins = "rejester.support.test"
 
 @pytest.fixture(scope='function')
 def registry(request, _rejester_config, _rejester_namespace):
