@@ -12,33 +12,11 @@ import os
 import time
 
 import pytest
-import yaml
 
 from rejester.exceptions import ItemInUseError, LostLease
-from rejester._queue import RejesterQueue
-from tests.rejester.make_namespace_string import make_namespace_string
 
-logger = logging.getLogger('rejester.Queue')
-
-@pytest.fixture(scope='function')
-def queue(request):
-    """a RejesterQueue that will die at the end of execution"""
-    config_path = os.path.join(os.path.dirname(__file__), 'config_registry.yaml')
-    with open(config_path, 'r') as f:
-        config = yaml.load(f)
-    config['namespace'] = make_namespace_string()
-    q = RejesterQueue(config, 'queue')
-
-    def fin():
-        q.delete_namespace()
-    
-    request.addfinalizer(fin)
-    return q
-
-@pytest.fixture
-def queue2(queue):
-    """a second RejesterQueue on the same queue with a different worker ID"""
-    return RejesterQueue(queue.config, queue.name)
+logger = logging.getLogger(__name__)
+pytest_plugins = 'rejester.support.test'
 
 def all_of_queue(queue):
     while True:
@@ -47,97 +25,97 @@ def all_of_queue(queue):
         queue.return_item(item, None)
         yield item
 
-def test_worker_id(queue):
+def test_worker_id(rejester_queue):
     """simple worker_id test"""
     # since we start with a new namespace every time, the worker IDs
     # should start fresh too
-    worker_id = queue.worker_id
+    worker_id = rejester_queue.worker_id
     assert worker_id == 1
 
-def test_one(queue):
+def test_one(rejester_queue):
     """Add 'a' with priority 1, and get it back"""
-    queue.add_item('a', 1)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 1)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    queue.return_item(item, None)
-    item = queue.check_out_item(300)
+    rejester_queue.return_item(item, None)
+    item = rejester_queue.check_out_item(300)
     assert item is None
 
-def test_one_helper(queue):
+def test_one_helper(rejester_queue):
     """Add 'a' with priority 1, and get it back"""
-    queue.add_item('a', 1)
-    assert list(all_of_queue(queue)) == ['a']
+    rejester_queue.add_item('a', 1)
+    assert list(all_of_queue(rejester_queue)) == ['a']
 
-def test_interesting_priorities(queue):
+def test_interesting_priorities(rejester_queue):
     """Zero, one, many"""
-    queue.add_item('a', 1)
-    queue.add_item('b', 1048576)
-    queue.add_item('c', -65536)
-    queue.add_item('d', 0)
-    queue.add_item('e', 0.5)
-    queue.add_item('f', -0.1)
-    queue.add_item('g', 0.2)
-    assert list(all_of_queue(queue)) == ['b', 'a', 'e', 'g', 'd', 'f', 'c']
+    rejester_queue.add_item('a', 1)
+    rejester_queue.add_item('b', 1048576)
+    rejester_queue.add_item('c', -65536)
+    rejester_queue.add_item('d', 0)
+    rejester_queue.add_item('e', 0.5)
+    rejester_queue.add_item('f', -0.1)
+    rejester_queue.add_item('g', 0.2)
+    assert list(all_of_queue(rejester_queue)) == ['b', 'a', 'e', 'g', 'd', 'f', 'c']
 
-def test_add_checked_out(queue):
+def test_add_checked_out(rejester_queue):
     """Adding a checked-out item should fail"""
-    queue.add_item('a', 1)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 1)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
     with pytest.raises(ItemInUseError):
-        queue.add_item('a', 1)
+        rejester_queue.add_item('a', 1)
 
-def test_two(queue):
+def test_two(rejester_queue):
     """Add two items, out of order, and get them back"""
-    queue.add_item('a', 2)
-    queue.add_item('b', 1)
-    assert list(all_of_queue(queue)) == ['a', 'b']
-    queue.add_item('a', 1)
-    queue.add_item('b', 2)
-    assert list(all_of_queue(queue)) == ['b', 'a']
+    rejester_queue.add_item('a', 2)
+    rejester_queue.add_item('b', 1)
+    assert list(all_of_queue(rejester_queue)) == ['a', 'b']
+    rejester_queue.add_item('a', 1)
+    rejester_queue.add_item('b', 2)
+    assert list(all_of_queue(rejester_queue)) == ['b', 'a']
 
-def test_reprioritize(queue):
+def test_reprioritize(rejester_queue):
     """Use add_item to change the priority of something"""
-    queue.add_item('a', 1)
-    queue.add_item('b', 2)
-    queue.add_item('b', 0)
-    assert list(all_of_queue(queue)) == ['a', 'b']
+    rejester_queue.add_item('a', 1)
+    rejester_queue.add_item('b', 2)
+    rejester_queue.add_item('b', 0)
+    assert list(all_of_queue(rejester_queue)) == ['a', 'b']
 
-def test_requeue(queue):
+def test_requeue(rejester_queue):
     """Pull items out and put them back"""
-    queue.add_item('a', 3)
-    queue.add_item('b', 2)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 3)
+    rejester_queue.add_item('b', 2)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    queue.return_item(item, 3)
-    item = queue.check_out_item(300)
+    rejester_queue.return_item(item, 3)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    queue.return_item(item, 1)
-    assert list(all_of_queue(queue)) == ['b', 'a']
+    rejester_queue.return_item(item, 1)
+    assert list(all_of_queue(rejester_queue)) == ['b', 'a']
 
-def test_wrong_worker(queue, queue2):
+def test_wrong_worker(rejester_queue, rejester_queue2):
     """If one queue instance checks out an item, another can't return it"""
-    queue.add_item('a', 1)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 1)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
     # NOTE: this also implicitly tests that creating a new queue
     # object gets a different worker ID
     with pytest.raises(LostLease):
-        queue2.return_item(item, None)
+        rejester_queue2.return_item(item, None)
 
-def test_check_out_two(queue):
+def test_check_out_two(rejester_queue):
     """Nothing prevents the same worker from checking out two things"""
-    queue.add_item('a', 2)
-    queue.add_item('b', 1)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 2)
+    rejester_queue.add_item('b', 1)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    item = queue.check_out_item(300)
+    item = rejester_queue.check_out_item(300)
     assert item == 'b'
-    queue.return_item('a', None)
-    queue.return_item('b', 1)
-    assert list(all_of_queue(queue)) == ['b']
+    rejester_queue.return_item('a', None)
+    rejester_queue.return_item('b', 1)
+    assert list(all_of_queue(rejester_queue)) == ['b']
 
-def test_reserve(queue, queue2):
+def test_reserve(rejester_queue, rejester_queue2):
     """Basic reservation/priority test
 
     1. Insert a@3, b@2
@@ -148,96 +126,97 @@ def test_reserve(queue, queue2):
     6. Get, should return 'b'
 
     """
-    queue.add_item('a', 3)
-    queue.add_item('b', 2)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 3)
+    rejester_queue.add_item('b', 2)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    reserved = queue.reserve_items(item, 'b')
+    reserved = rejester_queue.reserve_items(item, 'b')
     assert reserved == ['b']
-    assert list(all_of_queue(queue2)) == []
-    queue.return_item(item, 1)
-    assert list(all_of_queue(queue2)) == ['b', 'a']
+    assert list(all_of_queue(rejester_queue2)) == []
+    rejester_queue.return_item(item, 1)
+    assert list(all_of_queue(rejester_queue2)) == ['b', 'a']
 
-def test_reserve_twice(queue):
+def test_reserve_twice(rejester_queue):
     """Reserving an item that's already reserved is a no-op"""
-    queue.add_item('a', 2)
-    queue.add_item('b', 1)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 2)
+    rejester_queue.add_item('b', 1)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    reserved = queue.reserve_items(item, 'b')
+    reserved = rejester_queue.reserve_items(item, 'b')
     assert reserved == ['b']
-    reserved = queue.reserve_items(item, 'b')
+    reserved = rejester_queue.reserve_items(item, 'b')
     assert reserved == []
     
 
-def test_reserve_nonexistent(queue):
+def test_reserve_nonexistent(rejester_queue):
     """Reserving an item that doesn't exist is a no-op"""
-    queue.add_item('a', 1)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 1)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    reserved = queue.reserve_items(item, 'b')
+    reserved = rejester_queue.reserve_items(item, 'b')
     assert reserved == []
-    queue.return_item(item, None)
+    rejester_queue.return_item(item, None)
 
-def test_reserve_self(queue):
+def test_reserve_self(rejester_queue):
     """Reserving yourself is a no-op"""
-    queue.add_item('a', 1)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 1)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    reserved = queue.reserve_items(item, 'a')
+    reserved = rejester_queue.reserve_items(item, 'a')
     assert reserved == []
-    queue.return_item(item, None)
+    rejester_queue.return_item(item, None)
     
-def test_basic_expire(queue):
+def test_basic_expire(rejester_queue):
     """Basic expiration test"""
-    queue.add_item('a', 1)
-    item = queue.check_out_item(1)
+    rejester_queue.add_item('a', 1)
+    item = rejester_queue.check_out_item(1)
     assert item == 'a'
     time.sleep(3)
     with pytest.raises(LostLease):
-        queue.return_item(item, None)
+        rejester_queue.return_item(item, None)
 
-def test_expiration_releases_reservations(queue, queue2):
+def test_expiration_releases_reservations(rejester_queue, rejester_queue2):
     """If a reserves b, and a expires, then b should be released"""
-    queue.add_item('a', 2)
-    queue.add_item('b', 1)
-    item = queue.check_out_item(1)
+    rejester_queue.add_item('a', 2)
+    rejester_queue.add_item('b', 1)
+    item = rejester_queue.check_out_item(1)
     assert item == 'a'
-    reserved = queue.reserve_items(item, 'b')
+    reserved = rejester_queue.reserve_items(item, 'b')
     assert reserved == ['b']
 
-    assert list(all_of_queue(queue2)) == []
+    assert list(all_of_queue(rejester_queue2)) == []
     time.sleep(3)
-    assert list(all_of_queue(queue2)) == ['a', 'b']
+    assert list(all_of_queue(rejester_queue2)) == ['a', 'b']
 
-def test_renew(queue):
+def test_renew(rejester_queue):
     """Basic renew test"""
-    queue.add_item('a', 1)
-    item = queue.check_out_item(2)
+    rejester_queue.add_item('a', 1)
+    item = rejester_queue.check_out_item(2)
     assert item == 'a'
     time.sleep(1)
-    queue.renew_item(item, 3)
+    rejester_queue.renew_item(item, 3)
     time.sleep(2)
     # at this point we have slept(3), which is after the original
     # expiration, so we should *not* get LostLease because we renewed
-    queue.return_item(item, None)
+    rejester_queue.return_item(item, None)
 
-def test_renew_overdue(queue):
+def test_renew_overdue(rejester_queue):
     """Can't renew something that's already expired"""
-    queue.add_item('a', 1)
-    item = queue.check_out_item(1)
+    rejester_queue.add_item('a', 1)
+    item = rejester_queue.check_out_item(1)
     assert item == 'a'
     time.sleep(3)
     with pytest.raises(LostLease):
-        queue.renew_item(item, 3)
+        rejester_queue.renew_item(item, 3)
 
-def test_dump(queue):
+def test_dump(rejester_queue):
     """dump_queue() shouldn't crash; doesn't validate output"""
-    queue.add_item('a', 1)
-    queue.add_item('b', 0)
-    item = queue.check_out_item(300)
+    rejester_queue.add_item('a', 1)
+    rejester_queue.add_item('b', 0)
+    item = rejester_queue.check_out_item(300)
     assert item == 'a'
-    reserved = queue.reserve_items(item, 'b')
+    reserved = rejester_queue.reserve_items(item, 'b')
     assert reserved == ['b']
-    queue.dump_queue('worker', 'available', 'priorities', 'expiration',
-                     'workers', 'reservations_a', 'reservations_b', 'foo')
+    rejester_queue.dump_queue('worker', 'available', 'priorities', 'expiration',
+                              'workers', 'reservations_a', 'reservations_b',
+                              'foo')

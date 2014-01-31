@@ -1,21 +1,31 @@
+"""Standalone test for 'rejester run_worker'.
 
+This software is released under an MIT/X11 open source license.
+
+Copyright 2012-2014 Diffeo, Inc.
+
+"""
+
+from __future__ import absolute_import
+import errno
+import logging
 import os
-import time
-import pytest
 import signal
-import psutil
 import subprocess
-from rejester._logging import logger
-from tests.rejester.make_namespace_string import make_namespace_string
+import time
+
+import pytest
+
+logger = logging.getLogger(__name__)
+pytest_plugins = 'rejester.support.test'
 
 @pytest.fixture
-def rejester_cli_namespace(request):
-    namespace = make_namespace_string()
+def rejester_cli_namespace(request, _rejester_namespace):
+    """a rejester namespace that deletes itself using 'rejester delete'"""
     def fin():
-        subprocess.call(['rejester', 'delete', namespace])
-        pass
+        subprocess.call(['rejester', 'delete', _rejester_namespace])
     request.addfinalizer(fin)
-    return namespace
+    return _rejester_namespace
 
 def test_run(tmpdir, rejester_cli_namespace):
     """Lifecycle test for 'rejester run_worker'.
@@ -79,7 +89,7 @@ def test_run(tmpdir, rejester_cli_namespace):
             try:
                 os.kill(pid, 0)
             except OSError, exc:
-                assert exc.errno == 3
+                assert exc.errno == errno.ESRCH
                 break
             logger.debug( '%.1f elapsed seconds, %d still alive' % (elapsed, pid))
             time.sleep(0.2)  # wait a moment for daemon child to exit

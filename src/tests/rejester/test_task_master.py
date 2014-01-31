@@ -3,56 +3,22 @@ http://github.com/diffeo/rejester
 
 This software is released under an MIT/X11 open source license.
 
-Copyright 2012-2013 Diffeo, Inc.
+Copyright 2012-2014 Diffeo, Inc.
 '''
-from __future__ import absolute_import
-from __future__ import division
+from __future__ import absolute_import, division
+import logging
 import os
 import sys
 import time
-import yaml
-import logging
+
 import pytest
-import rejester
+
 from rejester import TaskMaster
-from rejester._logging import logger
 from rejester._task_master import WORK_UNITS_, _FINISHED
 from rejester.exceptions import LostLease
 
-from tests.rejester.make_namespace_string import make_namespace_string
-
-@pytest.fixture(scope='function')
-def task_master(request):
-    config_path = os.path.join(os.path.dirname(__file__), 'config_registry.yaml')
-    if not os.path.exists(config_path):
-        sys.exit('failed to find test config: %r' % config_path)
-
-    try:
-        config = yaml.load(open(config_path))
-    except Exception, exc:
-        sys.exit('failed to load %r: %s' % (config_path, exc))
-
-    config['namespace'] = make_namespace_string()
-
-    ## provide a second namespace that will get cleaned up -- used by
-    ## tests that run a test worker program
-    config['second_namespace'] = config['namespace'] + '_second'
-
-    def fin():
-        logging.info('test_task_master finalizer cleaning up namespace %r and %r', config.get('namespace'), config.get('second_namespace'))
-        task_master = TaskMaster(config)
-        task_master.registry.delete_namespace()
-        logging.info('deleted %r', config.get('namespace'))
-        config['namespace'] = config['second_namespace']
-        task_master = TaskMaster(config)
-        task_master.registry.delete_namespace()
-        logging.info('deleted %r', config.get('namespace'))
-        
-    request.addfinalizer(fin)
-
-    task_master = TaskMaster(config)
-    return task_master
-
+logger = logging.getLogger(__name__)
+pytest_plugins = 'rejester.support.test'
 
 work_spec = dict(
     name = 'tbundle',

@@ -2,38 +2,30 @@
 
 '''
 from __future__ import absolute_import
+from collections import defaultdict
+import logging
 import os
 import sys
-import yaml
 import time
+
 import pytest
+
 import rejester
 from rejester import Registry
-from rejester._logging import logger
 from rejester.exceptions import EnvironmentError
-from collections import defaultdict
-from tests.rejester.make_namespace_string import make_namespace_string
+
+logger = logging.getLogger(__name__)
+pytest_plugins = "rejester.support.test"
 
 @pytest.fixture(scope='function')
-def registry(request):
-    config_path = os.path.join(os.path.dirname(__file__), 'config_registry.yaml')
-    if not os.path.exists(config_path):
-        sys.exit('failed to find test config: %r' % config_path)
-
-    try:
-        config = yaml.load(open(config_path))
-    except Exception, exc:
-        sys.exit('failed to load %r: %s' % (config_path, exc))
-
+def registry(request, _rejester_config, _rejester_namespace):
+    config = dict(_rejester_config)
     config['app_name'] = 'rejester_test'
-    config['namespace'] = make_namespace_string()
-
+    config['namespace'] = _rejester_namespace
+    registry = Registry(config)
     def fin():
-        registry = Registry(config)
         registry.delete_namespace()
     request.addfinalizer(fin)
-
-    registry = Registry(config)
     return registry
 
 

@@ -21,9 +21,9 @@ import pytest
 import yaml
 
 import rejester
-from tests.rejester.test_task_master import task_master  ## a fixture that cleans up
 
 logger = logging.getLogger(__name__)
+pytest_plugins = 'rejester.support.test'
 
 ## 1KB sized work_spec config
 work_spec = dict(
