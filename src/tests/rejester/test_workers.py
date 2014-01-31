@@ -16,8 +16,9 @@ import pytest
 
 import rejester
 from rejester.workers import run_worker, MultiWorker
-from rejester._logging import logger
 from tests.rejester.test_task_master import task_master  ## a fixture that cleans up
+
+logger = logging.getLogger(__name__)
 
 def test_task_register(task_master):
     worker = MultiWorker(task_master.registry.config)
@@ -119,16 +120,17 @@ def run_multi_worker(task_master, duration):
         logger.info('finished running %d worker processes', num_workers)
     finally:
         if p.is_alive():
-            logger.debug("killing worker processes")
+            logger.debug("killing worker processes pid={0}".format(p.pid))
             p.terminate()
             p.join(1.0)
         if p.is_alive():
-            logger.warn("worker processes failed to die, hard killing")
-            os.kill(p.pid, signal.SIGTERM)
+            logger.warn("worker processes pid={0} failed to die, hard killing"
+                        .format(p.pid))
+            os.kill(p.pid, signal.SIGKILL)
             p.join(1.0)
         if p.is_alive():
-            logger.critical("worker processes resisted SIGKILL, cannot recover")
-            sys.exit()
+            logger.critical("worker processes pid={0} resisted SIGKILL"
+                            .format(p.pid))
 
 def test_task_master_multi_worker(task_master):
     num_units = 10

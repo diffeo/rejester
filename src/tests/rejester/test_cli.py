@@ -1,25 +1,29 @@
-'''
+'''Tests for the 'rejester' command-line tool.
+
 This software is released under an MIT/X11 open source license.
 
-Copyright 2012-2013 Diffeo, Inc.
+Copyright 2012-2014 Diffeo, Inc.
 '''
-import os
-import sys
-import copy
-import time
-import yaml
-import json
-import psutil
-import pytest
-import signal
-import pexpect
+from __future__ import absolute_import
+import contextlib
+import errno
 import logging
-import tempfile
-import rejester
+import json
+import os
+import re
+import signal
 from subprocess import Popen, PIPE
-from rejester._logging import logger
+import sys
+import time
 
+import pexpect
+import pytest
+import yaml
+
+import rejester
 from tests.rejester.test_task_master import task_master  ## a fixture that cleans up
+
+logger = logging.getLogger(__name__)
 
 ## 1KB sized work_spec config
 work_spec = dict(
@@ -31,6 +35,16 @@ work_spec = dict(
     run_function = 'test_work_program',
     terminate_function = 'test_work_program',
 )
+
+@contextlib.contextmanager
+def rejester_cmd(args, **kwargs):
+    """Helper to run rejester in a subshell, cleaning up afterwards"""
+    logger.info('rejester {0}'.format(' '.join(args)))
+    child = pexpect.spawn('rejester', args=args, **kwargs)
+    try:
+        yield child
+    finally:
+        child.close()
 
 def test_cli(task_master, tmpdir):
     tmpf = str(tmpdir.join("work_spec.yaml"))
@@ -46,34 +60,33 @@ def test_cli(task_master, tmpdir):
             f.write(work_unit + '\n')
 
     namespace = task_master.registry.config['namespace']
-    cmd = 'rejester load ' + namespace + ' --app-name rejester_test -u '\
-          + tmpf2 + ' -w ' + tmpf
-    logger.info(cmd)
-    child = pexpect.spawn(cmd)
-    child.logfile = sys.stdout
-    time.sleep(1)
-    child.expect('loading', timeout=5)
-    child.expect('pushing', timeout=5)
-    child.expect('finish', timeout=5)
+    with rejester_cmd(['load', namespace, '--app-name', 'rejester_test',
+                       '-u', tmpf2, '-w', tmpf]) as child:
+        child.logfile = sys.stdout
+        time.sleep(1)
+        child.expect('loading', timeout=5)
+        child.expect('pushing', timeout=5)
+        child.expect('finish', timeout=5)
 
-    logger.critical(json.dumps(task_master.status(work_spec['name']), indent=4))
+    logger.debug(json.dumps(task_master.status(work_spec['name']), indent=4))
 
-    cmd = 'rejester status ' + namespace + ' --app-name rejester_test -w ' + tmpf
-    logger.info(cmd)
-    p = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True)
-    logger.critical(p.stderr.read())
-    logger.critical(p.stdout.read())
-    child = pexpect.spawn(cmd)
-    child.expect('num_available.*%d' % num_units)
+    args = ['status', namespace,
+            '--app-name', 'rejester_test',
+            '-w', tmpf]
+    p = Popen(['rejester'] + args, stdout=PIPE, stderr=PIPE)
+    try:
+        (out,err) = p.communicate()
+        assert re.search('num_available.*{0}'.format(num_units), out)
+    finally:
+        p.wait()
 
     tmp_pid = str(tmpdir.join('pid'))
     tmp_log = str(tmpdir.join('log'))
-    cmd = 'rejester run_worker ' + namespace + ' --app-name rejester_test --logpath '\
-          + tmp_log + ' --pidfile ' + tmp_pid
-    logger.info(cmd)
-    child = pexpect.spawn(cmd)
-    child.logfile = sys.stdout
-    child.expect('entering', timeout=5)    
+    with rejester_cmd(['run_worker', namespace, '--app-name', 'rejester_test',
+                       '--logpath', tmp_log, '--pidfile', tmp_pid]) as child:
+        child.logfile = sys.stdout
+        child.expect('entering', timeout=5)    
+
     max_time = 10
     elapsed = 0
     start_time = time.time()
@@ -81,42 +94,58 @@ def test_cli(task_master, tmpdir):
         if os.path.exists(tmp_pid):
             break
         if os.path.exists(tmp_log):
-            logger.critical('found logfile: %s' % open(tmp_log).read())
-        logger.critical( '%.1f elapsed seconds, %r not there yet, wait' % (elapsed, tmp_pid))
+            logger.debug('found logfile: %s' % open(tmp_log).read())
+        logger.debug( '%.1f elapsed seconds, %r not there yet, wait' % (elapsed, tmp_pid))
         time.sleep(0.2)  # wait a moment for daemon child to wake up and write pidfile
         elapsed = time.time() - start_time
     pid = int(open(tmp_pid).read())
-    assert pid in psutil.get_pid_list()
+    try:
+        os.kill(pid, 0) # will raise OSError if pid is dead
 
-    cmd = 'rejester set_RUN ' + namespace + ' --app-name rejester_test'
-    logger.info(cmd)
-    child = pexpect.spawn(cmd)
-    child.logfile = sys.stdout
-    child.expect('set', timeout=5)
+        with rejester_cmd(['set_RUN', namespace,
+                           '--app-name', 'rejester_test']) as child:
+            child.logfile = sys.stdout
+            child.expect('set', timeout=5)
 
-    elapsed = 0
-    start_time = time.time()
-    while elapsed < max_time:
-        if task_master.num_finished(work_spec['name']) == num_units:
-            break
-        if os.path.exists(tmp_log):
-            logger.critical('found logfile: %s' % open(tmp_log).read())
-        logger.critical( '%.1f elapsed seconds, %d finished', elapsed,
+        elapsed = 0
+        start_time = time.time()
+        while elapsed < max_time:
+            if task_master.num_finished(work_spec['name']) == num_units:
+                break
+            if os.path.exists(tmp_log):
+                with open(tmp_log, 'r') as f:
+                    print f.read()
+            logger.info( '%.1f elapsed seconds, %d finished', elapsed,
                          task_master.num_finished(work_spec['name']))
-        logger.critical(json.dumps(task_master.status(work_spec['name']), indent=4))
-        time.sleep(1)
-        elapsed = time.time() - start_time
-    assert task_master.num_finished(work_spec['name']) == num_units
-    logger.info('tasks completed')
+            logger.info(json.dumps(task_master.status(work_spec['name']), indent=4))
+            time.sleep(1)
+            elapsed = time.time() - start_time
 
-    os.kill(pid, signal.SIGTERM)
-    elapsed = 0
-    start_time = time.time()
-    while elapsed < max_time:
-        if pid not in psutil.get_pid_list():
-            break
-        logger.critical( '%.1f elapsed seconds, %d still alive' % (elapsed, pid))
-        time.sleep(0.2)  # wait a moment for daemon child to exit
-        elapsed = time.time() - start_time
-    assert pid not in psutil.get_pid_list()
-    logger.info('worker exited')
+        assert task_master.num_finished(work_spec['name']) == num_units
+        logger.info('tasks completed')
+    finally:
+        os.kill(pid, signal.SIGTERM)
+        elapsed = 0
+        start_time = time.time()
+        while elapsed < max_time:
+            try:
+                os.kill(pid, 0)
+            except OSError, exc:
+                # If we get a "no such process" error then the process is dead
+                # (which is what we want)
+                assert exc.errno == errno.ESRCH
+                break
+            logger.debug( '%.1f elapsed seconds, %d still alive' % (elapsed, pid))
+            time.sleep(0.2)  # wait a moment for daemon child to exit
+            elapsed = time.time() - start_time
+        # Double-check the process is dead
+        try:
+            os.kill(pid, 0)
+            # if we did not get an exception then the process is alive
+            logger.warn('worker pid {0} did not respond to SIGTERM, killing')
+            os.kill(pid, signal.SIGKILL)
+            assert False, "workers did not shut down"
+        except OSError, exc:
+            assert exc.errno == errno.ESRCH
+            pass
+        logger.info('worker exited')

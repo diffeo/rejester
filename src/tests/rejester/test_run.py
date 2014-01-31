@@ -53,7 +53,13 @@ def test_run(tmpdir, rejester_cli_namespace):
         if p.returncode is None:
             p.poll()
         if p.returncode is None:
+            p.terminate()
+            time.sleep(0.1)
+            p.poll()
+        if p.returncode is None:
             p.kill()
+            time.sleep(0.1)
+            p.poll()
 
     while elapsed < max_time:
         if os.path.exists(tmp_pid):
