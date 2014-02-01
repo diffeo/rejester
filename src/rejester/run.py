@@ -6,22 +6,26 @@ This software is released under an MIT/X11 open source license.
 Copyright 2012-2013 Diffeo, Inc.
 '''
 from __future__ import absolute_import
-import os
-import sys
-import tty
-import json
-import yaml
-import daemon
-import termios
-import logging
-import logging.handlers
 import argparse
+import json
 import lockfile
+import logging
+import os
+from StringIO import StringIO
+import sys
+import termios
 import traceback
+import tty
 
+import daemon
+import yaml
+
+from dblogger import configure_logging, FixedWidthFormatter
 from rejester import TaskMaster
 from rejester.workers import run_worker, MultiWorker
-from rejester._logging import logger, formatter
+from yakonfig import set_global_config
+
+logger = logging.getLogger(__name__)
 
 def stderr(m, newline='\n'):
     sys.stderr.write(m)
@@ -45,12 +49,8 @@ def getch():
 
 
 class Manager(object):
-    def __init__(self, registry_addresses, app_name, namespace):
-        self.config = dict(
-            app_name=app_name,
-            namespace=namespace,
-            registry_addresses=registry_addresses,
-        )
+    def __init__(self, config):
+        self.config = config
         self.task_master = TaskMaster(self.config)
 
     def _get_work_spec(self, **kwargs):
@@ -143,19 +143,18 @@ class Manager(object):
             try:
                 open(pidfile,'w').write(str(os.getpid()))
                 if logpath:
+                    formatter = FixedWidthFormatter()
                     # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
                     handler = logging.handlers.RotatingFileHandler(
                         logpath, maxBytes=10000000, backupCount=3)
                     handler.setFormatter(formatter)
-                    logger.addHandler(handler)
-                logger.info('inside daemon context')
+                    logging.getLogger('').addHandler(handler)
+                logger.debug('inside daemon context')
                 run_worker(MultiWorker, self.config)        
-                logger.info('run_worker exited')
+                logger.debug('run_worker exited')
             except Exception, exc:
-                #catastrophe_log = os.path.join(os.path.dirname(logpath), 'rejester-failure-%d.log' % os.getpid())
-                #catastrophe_log = os.path.join('/tmp', 'rejester-failure-%d.log' % os.getpid())
-                catastrophe_log = os.path.join('/tmp', 'rejester-failure.log')
-                open(catastrophe_log, 'wb').write(traceback.format_exc(exc))
+                logp = logpath or os.path.join('/tmp', 'rejester-failure.log')
+                open(logp, 'w').write(traceback.format_exc(exc))
                 raise
         logger.debug('exited daemon context, pidfile=%r', pidfile)
 
@@ -175,29 +174,43 @@ def main():
     parser.add_argument('-u', '--work-units', default='-', dest='work_units_path',
                         help='path to file with one JSON record per line, each describing a Work Unit')
     parser.add_argument('--logpath', default=None)
+    parser.add_argument('-c', '--config', default=None, metavar='config.yaml',
+                        help='path to configuration file')
     args = parser.parse_args()
 
-    ## Split actions by comma, and execute them in sequence
+    # If we were given a config file, load it
+    if args.config is not None:
+        config = set_global_config(path=args.config)
+    else:
+        config = set_global_config(stream=StringIO('{}'))
+
+    # Fill in more config options from args
+    rejester_config = config.setdefault('rejester', {})
+    if args.app_name is not None: rejester_config['app_name'] = args.app_name
+    if args.registry_addresses != []:
+        rejester_config['registry_addresses'] = args.registry_addresses
+    rejester_config['namespace'] = args.namespace
+
+    # Default values
+    rejester_config.setdefault('app_name', 'rejester')
+    rejester_config.setdefault('registry_addresses', ['redis.diffeo.com:6379'])
+
+    configure_logging(config)
+
+    # Split actions by comma, and execute them in sequence
     actions = args.action.split(',')
-
-    #logger.critical(actions)
-
     for action_string in actions:
         if action_string not in Manager.__dict__:
-            sys.exit( 'ACTION=%r is not in %r' % (action_string, Manager.__dict__) )
+            stderr('Unrecognized action "{}"'.format(action_string))
+            return
 
-    if len(args.registry_addresses) == 0:
-        ## default to public testing instance
-        args.registry_addresses.append( 'redis.diffeo.com:6379' )
-
-    mgr = Manager(args.registry_addresses, args.app_name, args.namespace)
+    mgr = Manager(rejester_config)
 
     for action_string in actions:
-        logger.critical(action_string)
+        logger.info('Running action "{}"'.format(action_string))
         action = getattr(mgr, action_string)
         action(**args.__dict__)
 
 
 if __name__ == '__main__':
-    print 'hi'
     main()

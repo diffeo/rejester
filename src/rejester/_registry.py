@@ -9,7 +9,7 @@ from __future__ import absolute_import
 import time
 import uuid
 import json
-import redis
+import logging
 import random
 import socket
 import atexit
@@ -18,13 +18,13 @@ from uuid import UUID
 from functools import wraps
 from collections import defaultdict
 
+import redis
+
 from rejester.exceptions import EnvironmentError, LockError, \
     ProgrammerError
 from rejester._redis import RedisBase
 
-from rejester._logging import logger as relogger
-logger = relogger.getChild('Registry')
-
+logger = logging.getLogger(__name__)
 
 class Registry(RedisBase):
     '''provides a centralized storage mechanism for dictionaries,

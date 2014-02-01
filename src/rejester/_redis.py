@@ -7,12 +7,12 @@ Copyright 2012-2014 Diffeo, Inc.
 
 from __future__ import absolute_import
 
+import logging
 import socket
 
 import redis
 
-from rejester._logging import logger as relogger
-logger = relogger.getChild('Redis')
+logger = logging.getLogger(__name__)
 
 class RedisBase(object):
     """Common base class for Redis-based distributed worker systems.

@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import uuid
+import logging
 import gevent
 import psutil
 import random
@@ -16,11 +17,11 @@ import multiprocessing
 from signal import signal, SIGHUP, SIGTERM, SIGABRT
 from operator import itemgetter
 from collections import deque
+
 from rejester._task_master import TaskMaster, Worker, \
     WORKER_OBSERVED_MODE, WORKER_STATE_
 
-from ._logging import logger as relogger
-logger = relogger.getChild('workers')
+logger = logging.getLogger(__name__)
 
 def test_work_program(work_unit):
     ## just to show that this works, we get the config from the data

@@ -119,6 +119,8 @@ setup(
         'epydoc',
     ],
     install_requires=[
+        'dblogger',
+        'yakonfig',
         'gevent',
         'pyyaml',
         'redis',

@@ -20,15 +20,15 @@ Copyright 2014 Diffeo, Inc.
 
 from __future__ import absolute_import
 
+import logging
 import time
 
 import redis
 
 from rejester.exceptions import ItemInUseError, LostLease
-from rejester._logging import logger as relogger
 from rejester._redis import RedisBase
 
-logger = relogger.getChild('Queue')
+logger = logging.getLogger(__name__)
 
 class RejesterQueue(RedisBase):
     """A Redis-based priority queue.

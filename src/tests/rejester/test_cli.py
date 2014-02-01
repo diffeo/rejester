@@ -70,7 +70,6 @@ def test_cli(task_master, tmpdir):
                       '--logpath {} --pidfile {}'
                       .format(namespace, tmp_log, tmp_pid),
                       timeout=5, logfile=sys.stdout)
-    assert out.find('entering') != -1
     assert os.path.exists(tmp_pid)
     pid = int(open(tmp_pid).read())
     try:
@@ -98,7 +97,10 @@ def test_cli(task_master, tmpdir):
         assert task_master.num_finished(work_spec['name']) == num_units
         logger.info('tasks completed')
     finally:
-        os.kill(pid, signal.SIGTERM)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError, exc:
+            pass # assume errno == -ESRCH; we'll do more below
         start_time = time.time()
         end_time = start_time + 20
         while time.time() < end_time:

@@ -10,6 +10,7 @@ from __future__ import division
 import abc
 import uuid
 import time
+import logging
 import psutil
 import socket
 import traceback
@@ -17,10 +18,10 @@ import pkg_resources
 from operator import itemgetter
 
 from rejester._registry import Registry
-from ._logging import logger
 from rejester.exceptions import ProgrammerError, LockError, \
     LostLease, EnvironmentError
 
+logger = logging.getLogger(__name__)
 
 BUNDLES = 'bundles'
 NICE_LEVELS = 'NICE_LEVELS'
