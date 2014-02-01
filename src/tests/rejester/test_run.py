@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 def rejester_cli_namespace(request, _rejester_namespace):
     """a rejester namespace that deletes itself using 'rejester delete'"""
     def fin():
-        subprocess.call(['rejester', 'delete', _rejester_namespace])
+        subprocess.call(['rejester', 'delete', _rejester_namespace,
+                         '--yes'])
     request.addfinalizer(fin)
     return _rejester_namespace
 
