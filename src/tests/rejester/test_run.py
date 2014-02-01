@@ -11,9 +11,10 @@ import errno
 import logging
 import os
 import signal
-import subprocess
+import sys
 import time
 
+import pexpect
 import pytest
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,8 @@ logger = logging.getLogger(__name__)
 def rejester_cli_namespace(request, _rejester_namespace):
     """a rejester namespace that deletes itself using 'rejester delete'"""
     def fin():
-        subprocess.call(['rejester', 'delete', _rejester_namespace,
-                         '--yes'])
+        pexpect.run('rejester delete {0} --yes'.format(_rejester_namespace),
+                    logfile=sys.stdout, timeout=5)
     request.addfinalizer(fin)
     return _rejester_namespace
 
@@ -39,62 +40,31 @@ def test_run(tmpdir, rejester_cli_namespace):
     tmp_pid = str(tmpdir.join('pid'))
     tmp_log = str(tmpdir.join('log'))
     logger.info('pidfile=%r', tmp_pid)
-    p = subprocess.Popen(
-        ['rejester', 'run_worker', namespace, '--pidfile', tmp_pid,
-         '--logpath', tmp_log],
-        stderr=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-    )
-    try:
-        max_time = 20
-        start_time = time.time()
-        elapsed = 0
-        while elapsed < max_time:
-            logger.debug('{0} exists? {1}'.format(tmp_pid, os.path.exists(tmp_pid)))
-            elapsed = time.time() - start_time
-            out, err = p.communicate()
-            print out
-            print err
-            ret = p.poll()
-            if ret is not None:
-                break
-        assert ret == 0
-    finally:
-        if p.returncode is None:
-            p.poll()
-        if p.returncode is None:
-            p.terminate()
-            time.sleep(0.1)
-            p.poll()
-        if p.returncode is None:
-            p.kill()
-            time.sleep(0.1)
-            p.poll()
-
-    while elapsed < max_time:
-        if os.path.exists(tmp_pid):
-            break
-        logger.debug('{0} not there yet, wait'.format(tmp_pid))
-        time.sleep(0.2)  # wait a moment for daemon child to wake up and write pidfile
-        elapsed = time.time() - start_time
-    pid = int(open(tmp_pid).read())
+    pexpect.run('rejester run_worker {0} --pidfile {1} --logpath {2}'
+                .format(namespace, tmp_pid, tmp_log),
+                logfile=sys.stdout,
+                timeout=5)
+    # This spawns a daemon and exits, so run() should return promptly,
+    # and the pid file should exist
+    assert os.path.exists(tmp_pid)
+    pid = int(open(tmp_pid, 'r').read())
     # Unixese for "make sure this process exists"
     os.kill(pid, 0)
     try:
         logger.info('Sending SIGTERM to pid {0}'.format(pid))
         os.kill(pid, signal.SIGTERM)
-        elapsed = 0
-        start_time = time.time()
-        while elapsed < max_time:
+        start_time = 0
+        end_time = time.time() + 20
+        while time.time() < end_time:
             try:
                 os.kill(pid, 0)
             except OSError, exc:
                 assert exc.errno == errno.ESRCH
                 break
-            logger.debug( '%.1f elapsed seconds, %d still alive' % (elapsed, pid))
+            logger.debug('{:1f} elapsed seconds, pid {} still alive'
+                         .format(time.time() - start_time, pid))
             time.sleep(0.2)  # wait a moment for daemon child to exit
-            elapsed = time.time() - start_time
-        assert elapsed < max_time, "Daemon process did not die when asked"
+        assert time.time() < end_time, "Daemon process did not die when asked"
     finally:
         # kill -9 pid, if it still exists
         try:

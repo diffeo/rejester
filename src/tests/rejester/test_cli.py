@@ -5,14 +5,12 @@ This software is released under an MIT/X11 open source license.
 Copyright 2012-2014 Diffeo, Inc.
 '''
 from __future__ import absolute_import
-import contextlib
 import errno
 import logging
 import json
 import os
 import re
 import signal
-from subprocess import Popen, PIPE
 import sys
 import time
 
@@ -35,16 +33,6 @@ work_spec = dict(
     terminate_function = 'test_work_program',
 )
 
-@contextlib.contextmanager
-def rejester_cmd(args, **kwargs):
-    """Helper to run rejester in a subshell, cleaning up afterwards"""
-    logger.info('rejester {0}'.format(' '.join(args)))
-    child = pexpect.spawn('rejester', args=args, **kwargs)
-    try:
-        yield child
-    finally:
-        child.close()
-
 def test_cli(task_master, tmpdir):
     tmpf = str(tmpdir.join("work_spec.yaml"))
     with open(tmpf, 'w') as f:
@@ -59,74 +47,61 @@ def test_cli(task_master, tmpdir):
             f.write(work_unit + '\n')
 
     namespace = task_master.registry.config['namespace']
-    with rejester_cmd(['load', namespace, '--app-name', 'rejester_test',
-                       '-u', tmpf2, '-w', tmpf]) as child:
-        child.logfile = sys.stdout
-        time.sleep(1)
+    child = pexpect.spawn('rejester load {} --app-name rejester_test '
+                          '-u {} -w {}'.format(namespace, tmpf2, tmpf),
+                          logfile=sys.stdout)
+    try:
         child.expect('loading', timeout=5)
         child.expect('pushing', timeout=5)
         child.expect('finish', timeout=5)
+    finally:
+        child.close()
 
     logger.debug(json.dumps(task_master.status(work_spec['name']), indent=4))
 
-    args = ['status', namespace,
-            '--app-name', 'rejester_test',
-            '-w', tmpf]
-    p = Popen(['rejester'] + args, stdout=PIPE, stderr=PIPE)
-    try:
-        (out,err) = p.communicate()
-        assert re.search('num_available.*{0}'.format(num_units), out)
-    finally:
-        p.wait()
+    out = pexpect.run('rejester status {} --app-name rejester_test -w {}'
+                      .format(namespace, tmpf),
+                      timeout=5, logfile=sys.stdout)
+    assert re.search('num_available.*{0}'.format(num_units), out)
 
     tmp_pid = str(tmpdir.join('pid'))
     tmp_log = str(tmpdir.join('log'))
-    with rejester_cmd(['run_worker', namespace, '--app-name', 'rejester_test',
-                       '--logpath', tmp_log, '--pidfile', tmp_pid]) as child:
-        child.logfile = sys.stdout
-        child.expect('entering', timeout=5)    
-
-    max_time = 10
-    elapsed = 0
-    start_time = time.time()
-    while elapsed < max_time:
-        if os.path.exists(tmp_pid):
-            break
-        if os.path.exists(tmp_log):
-            logger.debug('found logfile: %s' % open(tmp_log).read())
-        logger.debug( '%.1f elapsed seconds, %r not there yet, wait' % (elapsed, tmp_pid))
-        time.sleep(0.2)  # wait a moment for daemon child to wake up and write pidfile
-        elapsed = time.time() - start_time
+    out = pexpect.run('rejester run_worker {} --app-name rejester_test '
+                      '--logpath {} --pidfile {}'
+                      .format(namespace, tmp_log, tmp_pid),
+                      timeout=5, logfile=sys.stdout)
+    assert out.find('entering') != -1
+    assert os.path.exists(tmp_pid)
     pid = int(open(tmp_pid).read())
     try:
         os.kill(pid, 0) # will raise OSError if pid is dead
 
-        with rejester_cmd(['set_RUN', namespace,
-                           '--app-name', 'rejester_test']) as child:
-            child.logfile = sys.stdout
-            child.expect('set', timeout=5)
+        out = pexpect.run('rejester set_RUN {} --app-name rejester_test'
+                          .format(namespace),
+                          timeout=5, logfile=sys.stdout) 
+        assert out.find('set') != -1
 
-        elapsed = 0
         start_time = time.time()
-        while elapsed < max_time:
+        end_time = start_time + 60
+        while time.time() < end_time:
             if task_master.num_finished(work_spec['name']) == num_units:
                 break
             if os.path.exists(tmp_log):
                 with open(tmp_log, 'r') as f:
                     print f.read()
-            logger.info( '%.1f elapsed seconds, %d finished', elapsed,
-                         task_master.num_finished(work_spec['name']))
-            logger.info(json.dumps(task_master.status(work_spec['name']), indent=4))
+            logger.info('{:.1f} elapsed seconds, {} finished'
+                        .format(time.time() - start_time,
+                                task_master.num_finished(work_spec['name'])))
+            logger.debug(json.dumps(task_master.status(work_spec['name'])))
             time.sleep(1)
-            elapsed = time.time() - start_time
 
         assert task_master.num_finished(work_spec['name']) == num_units
         logger.info('tasks completed')
     finally:
         os.kill(pid, signal.SIGTERM)
-        elapsed = 0
         start_time = time.time()
-        while elapsed < max_time:
+        end_time = start_time + 20
+        while time.time() < end_time:
             try:
                 os.kill(pid, 0)
             except OSError, exc:
@@ -134,14 +109,15 @@ def test_cli(task_master, tmpdir):
                 # (which is what we want)
                 assert exc.errno == errno.ESRCH
                 break
-            logger.debug( '%.1f elapsed seconds, %d still alive' % (elapsed, pid))
+            logger.debug('{:.1f} elapsed seconds, {} still alive'
+                         .format(time.time() - start_time, pid))
             time.sleep(0.2)  # wait a moment for daemon child to exit
-            elapsed = time.time() - start_time
         # Double-check the process is dead
         try:
             os.kill(pid, 0)
             # if we did not get an exception then the process is alive
-            logger.warn('worker pid {0} did not respond to SIGTERM, killing')
+            logger.warn('worker pid {0} did not respond to SIGTERM, killing'
+                        .format(pid))
             os.kill(pid, signal.SIGKILL)
             assert False, "workers did not shut down"
         except OSError, exc:
