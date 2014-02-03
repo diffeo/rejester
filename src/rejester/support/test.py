@@ -40,6 +40,7 @@ Copyright 2012-2014 Diffeo, Inc.
 import getpass
 import hashlib
 import os
+import re
 import socket
 
 import pytest
@@ -52,12 +53,12 @@ def make_namespace_string(test_name=''):
     generates a descriptive namespace for testing, which is unique to
     this user and also this process ID and host running the test.
 
-    This also ensures that the namespace name is shorter than 48 chars
-    and obeys the other constraints of the various backend DBs that we
-    use.
+    The returned string is never longer than 40 characters, and never
+    contains non-alphanumeric-underscore characters.  (It matches the
+    regular expression [a-zA-Z0-9_]{,40}.)
     '''
     return '_'.join([
-            test_name[-25:], 
+            re.sub('\W', '', test_name)[-23:], 
             getpass.getuser().replace('-', '_')[:5],
             str(os.getpid()),
             hashlib.md5(socket.gethostname()).hexdigest()[:4],
