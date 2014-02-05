@@ -60,18 +60,47 @@ def make_namespace_string(test_name=''):
     return '_'.join([
             re.sub('\W', '', test_name)[-23:], 
             getpass.getuser().replace('-', '_')[:5],
-            str(os.getpid()),
+            str(os.getpid())[-5:],
             hashlib.md5(socket.gethostname()).hexdigest()[:4],
             ])
 
 @pytest.fixture(scope='function')
-def _rejester_namespace(request):
+def _namespace_string(request):
+    """A dynamically namespace string.
+
+    This is used by other fixtures to ensure that they use the same
+    namespace.  If you use this directly, you are responsible for
+    cleaning up the namespace when your test ends.  This can be reused
+    by other components that have the notion of a "namespace".
+
+    """
+    return make_namespace_string(request.node.name)
+
+@pytest.fixture(scope='function')
+def _rejester_namespace(_namespace_string):
     """A dynamically constructed rejester namespace.
 
     This is used by other fixtures to ensure that they use the same
     namespace.  If you use this directly, you are responsible for
-    cleaning up the namespace when your test ends."""
-    return make_namespace_string(request.node.name)
+    cleaning up the namespace when your test ends.
+
+    *Deprecated:* use `_namespace_string` instead.  This string is
+     identical.
+
+    """
+    return _namespace_string
+
+@pytest.fixture(scope='function')
+def _namespace_string2(request):
+    """A second dynamically constructed namespace string.
+
+    This is similar to `_namespace_string`, but is guaranteed to be
+    different.  Again, this is not managed on its own but is intended
+    to be used by higher-level fixtures, and callers are responsible
+    for ensuring that the namespace is cleaned up afterwards.
+
+    """
+    return make_namespace_string(request.node.name + '2')
 
 @pytest.fixture(scope='function')
 def _rejester_config(request):
@@ -90,16 +119,7 @@ def _rejester_config(request):
         return {}
 
 @pytest.fixture(scope='function')
-def _rejester_namespace2(_rejester_namespace):
-    """A second dynamically constructed rejester namespace.
-
-    This is used by other fixtures to ensure that they use the same
-    namespace.  If you use this directly, you are responsible for
-    cleaning up the namespace when your test ends."""
-    return _rejester_namespace + '_second'
-
-@pytest.fixture(scope='function')
-def task_master(request, _rejester_config, _rejester_namespace):
+def task_master(request, _rejester_config, _namespace_string):
     """A rejester TaskMaster for loading or querying work.
 
     The TaskMaster will have a dynamically created namespace.
@@ -109,7 +129,7 @@ def task_master(request, _rejester_config, _rejester_namespace):
 
     """
     config = dict(_rejester_config)
-    config['namespace'] = _rejester_namespace
+    config['namespace'] = _namespace_string
     tm = TaskMaster(config)
     def fin():
         tm.registry.delete_namespace()
@@ -117,7 +137,7 @@ def task_master(request, _rejester_config, _rejester_namespace):
     return tm
 
 @pytest.fixture(scope='function')
-def task_master2(request, _rejester_config, _rejester_namespace2):
+def task_master2(request, _rejester_config, _namespace_string2):
     """A rejester TaskMaster on a second namespace.
 
     The TaskMaster will have a dynamically created namespace, distinct
@@ -127,7 +147,7 @@ def task_master2(request, _rejester_config, _rejester_namespace2):
 
     """
     config = dict(_rejester_config)
-    config['namespace'] = _rejester_namespace2
+    config['namespace'] = _namespace_string2
     tm = TaskMaster(config)
     def fin():
         tm.registry.delete_namespace()
@@ -135,7 +155,7 @@ def task_master2(request, _rejester_config, _rejester_namespace2):
     return tm
 
 @pytest.fixture(scope='function')
-def rejester_queue(request, _rejester_config, _rejester_namespace):
+def rejester_queue(request, _rejester_config, _namespace_string):
     """A RejesterQueue that will die at the end of execution.
 
     The queue will will be named 'queue', and will have a dynamically
@@ -145,7 +165,7 @@ def rejester_queue(request, _rejester_config, _rejester_namespace):
 
     """
     config = dict(_rejester_config)
-    config['namespace'] = _rejester_namespace
+    config['namespace'] = _namespace_string
     q = RejesterQueue(config, 'queue')
     def fin():
         q.delete_namespace()
