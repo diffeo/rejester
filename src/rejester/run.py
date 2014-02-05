@@ -3,7 +3,7 @@ rejester is a task manager written in python
 
 This software is released under an MIT/X11 open source license.
 
-Copyright 2012-2013 Diffeo, Inc.
+Copyright 2012-2014 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 import argparse
@@ -47,6 +47,9 @@ def getch():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
 
+class MissingArgumentError(Exception):
+    """Exception if more information needed to be given at the command line"""
+    pass
 
 class Manager(object):
     def __init__(self, config):
@@ -55,10 +58,24 @@ class Manager(object):
 
     def _get_work_spec(self, **kwargs):
         work_spec_path  = kwargs.get('work_spec_path')
+        if work_spec_path is None:
+            raise MissingArgumentError('give a path to a work spec file '
+                                       'with -w')
         if not os.path.exists(work_spec_path):
-            sys.exit( 'Path does not exist: %r' % work_spec_path )
+            raise MissingArgumentError('work spec file {!r} does not exist'
+                                       .format(work_spec_path))
         work_spec = yaml.load(open(work_spec_path))
         return work_spec
+
+    def _get_work_spec_name(self, **kwargs):
+        name = kwargs.get('work_spec_name')
+        if name is not None: return name
+        if 'work_spec_path' not in kwargs:
+            raise MissingArgumentError('give a path to a work spec file '
+                                       'with -w, or the work spec name '
+                                       'with -W')
+        work_spec = self._get_work_spec(**kwargs)
+        return work_spec['name']
 
     def load(self, **kwargs):
         '''loads work_units into a namespace for a given work_spec
@@ -111,8 +128,17 @@ class Manager(object):
             stderr(' ... Aborting.')
 
     def status(self, **kwargs):
-        work_spec = self._get_work_spec(**kwargs)
-        print json.dumps(self.task_master.status(work_spec['name']), indent=4, sort_keys=True)
+        work_spec_name = self._get_work_spec_name(**kwargs)
+        print json.dumps(self.task_master.status(work_spec_name), indent=4, sort_keys=True)
+
+    def work_units(self, **kwargs):
+        work_spec_name = self._get_work_spec_name(**kwargs)
+        work_units = self.task_master.list_work_units(work_spec_name)
+        for k in sorted(work_units.keys()):
+            if kwargs.get('verbose'):
+                print '{!r}: {!r}'.format(k, work_units[k])
+            else:
+                print k
 
     def set_IDLE(self, **kwargs):
         self.task_master.set_mode(self.task_master.IDLE)
@@ -171,11 +197,15 @@ def main():
                         help='Assume "yes" and require no input for confirmation questions.')
     parser.add_argument('-w', '--work-spec', dest='work_spec_path',
                         help='path to a YAML or JSON file containing a Work Spec')
+    parser.add_argument('-W', '--work-spec-name',
+                        help='name of a work spec for queries')
     parser.add_argument('-u', '--work-units', default='-', dest='work_units_path',
                         help='path to file with one JSON record per line, each describing a Work Unit')
     parser.add_argument('--logpath', default=None)
     parser.add_argument('-c', '--config', default=None, metavar='config.yaml',
                         help='path to configuration file')
+    parser.add_argument('-v', '--verbose', default=False, action='store_true',
+                        help='include more information in output')
     args = parser.parse_args()
 
     # If we were given a config file, load it
@@ -201,16 +231,17 @@ def main():
     actions = args.action.split(',')
     for action_string in actions:
         if action_string not in Manager.__dict__:
-            stderr('Unrecognized action "{}"'.format(action_string))
-            return
+            args.error('Unrecognized action "{}"'.format(action_string))
 
     mgr = Manager(rejester_config)
 
     for action_string in actions:
         logger.info('Running action "{}"'.format(action_string))
         action = getattr(mgr, action_string)
-        action(**args.__dict__)
-
+        try:
+            action(**args.__dict__)
+        except MissingArgumentError, e:
+            args.error('{}: {!s}'.format(action_string, e))
 
 if __name__ == '__main__':
     main()

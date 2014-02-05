@@ -64,6 +64,12 @@ def test_cli(task_master, tmpdir):
                       timeout=5, logfile=sys.stdout)
     assert re.search('num_available.*{0}'.format(num_units), out)
 
+    out = pexpect.run('rejester work_units {} --app-name rejester_test -w {}'
+                      .format(namespace, tmpf),
+                      timeout=5, logfile=sys.stdout)
+    assert out == ''.join(sorted(['key-{}\r\n'.format(n)
+                                  for n in xrange(num_units)]))
+
     tmp_pid = str(tmpdir.join('pid'))
     tmp_log = str(tmpdir.join('log'))
     out = pexpect.run('rejester run_worker {} --app-name rejester_test '

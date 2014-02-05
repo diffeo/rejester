@@ -330,6 +330,18 @@ class TaskMaster(object):
             num_tasks=self.num_tasks(work_spec_name),
             )
 
+
+    def list_work_units(self, work_spec_name):
+        """Get a dictionary of work units for some work spec.
+
+        The dictionary is from work unit name to work unit definiton.
+        Only work units that have not been completed ("available" or
+        "pending" work units) are included.
+
+        """
+        with self.registry.lock(atime=1000) as session:
+            return session.pull(WORK_UNITS_ + work_spec_name)
+
     def inspect_work_unit(self, work_spec_name, work_unit_key):
         '''
         returns work_unit.data

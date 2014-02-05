@@ -53,6 +53,32 @@ def test_task_master_basic_interface(task_master):
 
     assert 'status' in task_master.inspect_work_unit(work_spec['name'], work_unit.key)
 
+def test_list_work_units(task_master):
+    work_units = dict(foo={ 'length': 3 }, foobar={ 'length': 6 })
+    task_master.update_bundle(work_spec, work_units)
+
+    # Initial check: both work units are there
+    u = task_master.list_work_units(work_spec['name'])
+    for k,v in u.iteritems():
+        assert k in work_units
+        assert 'length' in v
+        assert len(k) == v['length']
+    for k in work_units.iterkeys(): assert k in u
+
+    # Start one unit; should still be there
+    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
+    assert work_unit.key in work_units
+    u = task_master.list_work_units(work_spec['name'])
+    assert work_unit.key in u
+    for k in u.iterkeys(): assert k in work_units
+    for k in work_units.iterkeys(): assert k in u
+
+    # Finish that unit; should be gone, the other should be there
+    work_unit.finish()
+    u = task_master.list_work_units(work_spec['name'])
+    assert work_unit.key not in u
+    for k in u.iterkeys(): assert k in work_units
+    for k in work_units.iterkeys(): assert k == work_unit.key or k in u
 
 def test_task_master_reset_all(task_master):
     work_units = dict(foo={}, bar={})
