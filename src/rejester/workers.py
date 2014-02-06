@@ -42,12 +42,18 @@ def run_worker(worker_class, *args, **kwargs):
     '''
     try:
         worker = worker_class(*args, **kwargs)
+    except Exception, exc:
+        logger.critical('failed to create worker {!r}'.format(worker_class),
+                        exc_info=True)
+        raise
+    try:
         worker.register()
         worker.run()
-        worker.unregister()
     except Exception, exc:
-        logger.critical('worker died! %r', worker_class, exc_info=True)
+        logger.error('worker {!r} died', worker_class, exc_info=True)
         raise
+    finally:
+        worker.unregister()
 
 
 class HeadlessWorker(Worker):
@@ -69,13 +75,11 @@ class HeadlessWorker(Worker):
         self.worker_id = self._pre_assigned_worker_id
 
     def run(self):
-        logger.critical('HeadlessWorker.run')
         self.work_unit.run()
 
     def terminate(self, sig_num, frame):
-        logger.critical('received %d', sig_num)
+        logger.info('received %d, ending work unit', sig_num)
         self.work_unit.terminate()
-        logger.critical('WorkUnit.terminate() complete')
         sys.exit()
 
 class MultiWorker(Worker):
@@ -87,6 +91,7 @@ class MultiWorker(Worker):
     def __init__(self, config):
         super(MultiWorker, self).__init__(config)
         self._event_queue = multiprocessing.Queue()
+        self._mode = None
         self.pool = None
 
     _available_gb = None
@@ -102,7 +107,6 @@ class MultiWorker(Worker):
         # We don't actually get anything useful from the work call, so
         # just post an event that causes us to wake up and poll all
         # the slots.
-        logger.debug('FINISH!')
         self._event_queue.put(True)
 
     def _poll_async_result(self, async_result, work_unit, do_update=True):
@@ -122,7 +126,7 @@ class MultiWorker(Worker):
                 work_unit.update()
             return
         except Exception, exc:
-            logger.critical('trapped child exception', exc_info=True)
+            logger.error('trapped child exception', exc_info=True)
             work_unit.fail(exc)
         else:
             ## if it gets here, slot should always be finished
@@ -135,7 +139,6 @@ class MultiWorker(Worker):
         "return (async_result, work_unit) or (None, None)"
         worker_id = uuid.uuid4().hex
         work_unit = self.task_master.get_work(worker_id, available_gb=self.available_gb())
-        logger.info('tm.get_work provided: %r', work_unit)
         if work_unit is None:
             return None, None
         async_result = self.pool.apply_async(
@@ -177,9 +180,12 @@ class MultiWorker(Worker):
         lastFullPoll = time.time()
         while True:
             mode = self.heartbeat()
+            if mode != self._mode:
+                logger.info('worker {} changed to mode {}'
+                            .format(self.worker_id, mode))
+                self._mode = mode
             now = time.time()
             should_update = (now - lastFullPoll) > min_loop_time
-            logger.info('MultiWorker observed mode=%r poll update=%s', mode, should_update)
             self._poll_slots(slots, mode=mode, do_update=should_update)
             if should_update:
                 lastFullPoll = now

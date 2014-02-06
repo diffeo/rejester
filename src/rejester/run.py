@@ -23,7 +23,7 @@ import yaml
 from dblogger import configure_logging, FixedWidthFormatter
 from rejester import TaskMaster
 from rejester.workers import run_worker, MultiWorker
-from yakonfig import set_global_config
+from yakonfig import set_global_config, get_global_config
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class Manager(object):
     def _get_work_spec_name(self, **kwargs):
         name = kwargs.get('work_spec_name')
         if name is not None: return name
-        if 'work_spec_path' not in kwargs:
+        if kwargs.get('work_spec_path') is None:
             raise MissingArgumentError('give a path to a work spec file '
                                        'with -w, or the work spec name '
                                        'with -W')
@@ -83,6 +83,9 @@ class Manager(object):
         work_spec = self._get_work_spec(**kwargs)
 
         work_units_path = kwargs.get('work_units_path')
+        if work_units_path is None:
+            raise MissingArgumentError('give a path to a work unit file '
+                                       'with -u')
         if work_units_path == '-':
             work_units_fh = sys.stdin
         elif work_units_path.endswith('.gz'):
@@ -154,20 +157,35 @@ class Manager(object):
 
     def run_worker(self, **kwargs):
         pidfile = kwargs.get('pidfile')
+        if pidfile is not None:
+            if not os.path.isabs(pidfile):
+                raise MissingArgumentError('--pidfile requires an '
+                                           'absolute path')
+            if not os.path.exists(os.path.dirname(pidfile)):
+                raise MissingArgumentError('--pidfile path {!r} does not exist'
+                                           .format(os.path.dirname(pidfile)))
+
         logpath = kwargs.get('logpath')
-        if not os.path.exists(os.path.dirname(logpath)):
-            sys.exit('logpath dir does not exist: %r' % os.path.dirname(logpath))
-        if not os.path.exists(os.path.dirname(pidfile)):
-            sys.exit('pidfile dir does not exist: %r' % os.path.dirname(pidfile))
+        if logpath is not None:
+            if not os.path.isabs(logpath):
+                raise MissingArgumentError('--logpath requires an '
+                                           'absolute path')
+            if not os.path.exists(os.path.dirname(logpath)):
+                raise MissingArgumentError('--logpath path {!r} does not exist'
+                                           .format(os.path.dirname(logpath)))
+
         if pidfile:
             pidfile_lock = lockfile.FileLock(pidfile)
         else:
             pidfile_lock = None
         context = daemon.DaemonContext(pidfile=pidfile_lock)
-        logger.debug('entering daemon context, pidfile=%r', pidfile)
         with context:
             try:
-                open(pidfile,'w').write(str(os.getpid()))
+                if pidfile:
+                    open(pidfile,'w').write(str(os.getpid()))
+                # Holding loggers open across DaemonContext is a big
+                # problem; establish them for the first time here
+                configure_logging(get_global_config())
                 if logpath:
                     formatter = FixedWidthFormatter()
                     # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
@@ -176,13 +194,12 @@ class Manager(object):
                     handler.setFormatter(formatter)
                     logging.getLogger('').addHandler(handler)
                 logger.debug('inside daemon context')
-                run_worker(MultiWorker, self.config)        
+                run_worker(MultiWorker, self.config)
                 logger.debug('run_worker exited')
             except Exception, exc:
                 logp = logpath or os.path.join('/tmp', 'rejester-failure.log')
-                open(logp, 'w').write(traceback.format_exc(exc))
+                open(logp, 'a').write(traceback.format_exc(exc))
                 raise
-        logger.debug('exited daemon context, pidfile=%r', pidfile)
 
 
 def main():
@@ -225,23 +242,24 @@ def main():
     rejester_config.setdefault('app_name', 'rejester')
     rejester_config.setdefault('registry_addresses', ['redis.diffeo.com:6379'])
 
-    configure_logging(config)
-
     # Split actions by comma, and execute them in sequence
     actions = args.action.split(',')
     for action_string in actions:
         if action_string not in Manager.__dict__:
-            args.error('Unrecognized action "{}"'.format(action_string))
+            parser.error('Unrecognized action "{}"'.format(action_string))
+
+    # run_worker is Very Special; anything else needs to set up logging now
+    if 'run_worker' not in actions:
+        configure_logging(config)
 
     mgr = Manager(rejester_config)
 
     for action_string in actions:
-        logger.info('Running action "{}"'.format(action_string))
         action = getattr(mgr, action_string)
         try:
             action(**args.__dict__)
         except MissingArgumentError, e:
-            args.error('{}: {!s}'.format(action_string, e))
+            parser.error('{}: {!s}'.format(action_string, e))
 
 if __name__ == '__main__':
     main()

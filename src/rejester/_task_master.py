@@ -88,7 +88,7 @@ class Worker(object):
                         priority=time.time() + self.lifetime)
             session.update(WORKER_STATE_ + self.worker_id, self.environment(), 
                            expire=self.lifetime)
-        logger.info('worker observed mode=%r', mode)
+        logger.debug('worker {} observed mode {}'.format(self.worker_id, mode))
         return mode
 
     @abc.abstractmethod
@@ -132,7 +132,8 @@ class WorkUnit(object):
                     self._module_cache = __import__(
                         self.spec['module'], globals(), (), funclist, -1)
                 except Exception, exc:
-                    logger.critical('failed to load spec["module"] = %r', self.spec['module'])
+                    logger.error('failed to load spec["module"] = %r',
+                                 self.spec['module'], exc_info=True)
                     raise
         return self._module_cache
 
@@ -141,9 +142,16 @@ class WorkUnit(object):
         work_spec.  Is called multiple times.
         '''
         run_function = getattr(self.module, self.spec['run_function'])
-        ret_val = run_function(self)
-        self.update()
-        return ret_val
+        logger.info('running work unit {}'.format(self.key))
+        try:
+            ret_val = run_function(self)
+            self.update()
+            logger.info('completed work unit {}'.format(self.key))
+            return ret_val
+        except Exception, exc:
+            logger.error('work unit {} failed'.format(self.key),
+                         exc_info=True)
+            raise
 
     def terminate(self):
         '''shutdown this WorkUnit using the function specified in its
@@ -157,9 +165,10 @@ class WorkUnit(object):
         if not terminate_function:
             logger.error('tried to terminate WorkUnit(%r) but no function %s in module %r', self.key, terminate_function_name, self.module.__name__)
             return None
+        logger.info('calling terminate function for work unit {}'
+                    .format(self.key))
         ret_val = terminate_function(self)
         self.update(lease_time=-10)
-        logger.critical('called workunit.terminate()')
         return ret_val
 
     def update(self, lease_time=300):
@@ -425,7 +434,7 @@ class TaskMaster(object):
                     if available_gb < work_specs[work_spec_name]['min_gb']:
                         continue
 
-                    logger.info('considering %s %s', work_spec_name, nice_levels)
+                    logger.debug('considering %s %s', work_spec_name, nice_levels)
 
                     ## try to get a task
                     wu_expires = time.time() + lease_time
@@ -466,7 +475,7 @@ class TaskMaster(object):
                 ## users of TaskMaster can have a single type of
                 ## expected exception, rather than two
                 raise LostLease(
-                    'assigned_work_unit_key=%r != %'
+                    'assigned_work_unit_key=%r != %r'
                     % (assigned_work_unit_key, work_unit_key))
             ## could trap EnvironmentError and raise LostLease instead
             work_unit_data = session.get(
