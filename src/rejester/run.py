@@ -54,7 +54,14 @@ class MissingArgumentError(Exception):
 class Manager(object):
     def __init__(self, config):
         self.config = config
-        self.task_master = TaskMaster(self.config)
+        self._task_master = None
+
+    @property
+    def task_master(self):
+        """A `TaskMaster` object for manipulating work"""
+        if self._task_master is None:
+            self._task_master = TaskMaster(self.config)
+        return self._task_master
 
     def _get_work_spec(self, **kwargs):
         work_spec_path  = kwargs.get('work_spec_path')
