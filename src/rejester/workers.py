@@ -50,7 +50,7 @@ def run_worker(worker_class, *args, **kwargs):
         worker.register()
         worker.run()
     except Exception, exc:
-        logger.error('worker {!r} died', worker_class, exc_info=True)
+        logger.error('worker {!r} died'.format(worker_class), exc_info=True)
         raise
     finally:
         worker.unregister()
