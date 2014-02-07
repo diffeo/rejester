@@ -39,6 +39,7 @@ Copyright 2012-2014 Diffeo, Inc.
 
 import getpass
 import hashlib
+import logging
 import os
 import re
 import socket
@@ -63,6 +64,31 @@ def make_namespace_string(test_name=''):
             str(os.getpid())[-5:],
             hashlib.md5(socket.gethostname()).hexdigest()[:4],
             ])
+
+def _then_delete_namespace(request, obj, registry=None):
+    """Helper to delete a namespace on cleanup.
+
+    :param request: py.test request fixture
+    :param obj: object to return
+    :param registry: object to call ``delete_namespace()``, use
+      `obj` if `None`
+    :return: obj
+
+    """
+    if registry is None: registry = obj
+    def fin():
+        # Avoid a spurious "no handlers could be found for logger"
+        # complaint.  delete_namespace() has a (useful) debug log
+        # statement; but when we get here, under the py.test
+        # capturelog plugin, the root logger has already been
+        # removed.
+        handler = logging.NullHandler()
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+        registry.delete_namespace()
+        root_logger.removeHandler(handler)
+    request.addfinalizer(fin)
+    return obj
 
 @pytest.fixture(scope='function')
 def _namespace_string(request):
@@ -131,10 +157,7 @@ def task_master(request, _rejester_config, _namespace_string):
     config = dict(_rejester_config)
     config['namespace'] = _namespace_string
     tm = TaskMaster(config)
-    def fin():
-        tm.registry.delete_namespace()
-    request.addfinalizer(fin)
-    return tm
+    return _then_delete_namespace(request, tm, tm.registry)
 
 @pytest.fixture(scope='function')
 def task_master2(request, _rejester_config, _namespace_string2):
@@ -149,10 +172,7 @@ def task_master2(request, _rejester_config, _namespace_string2):
     config = dict(_rejester_config)
     config['namespace'] = _namespace_string2
     tm = TaskMaster(config)
-    def fin():
-        tm.registry.delete_namespace()
-    request.addfinalizer(fin)
-    return tm
+    return _then_delete_namespace(request, tm, tm.registry)
 
 @pytest.fixture(scope='function')
 def rejester_queue(request, _rejester_config, _namespace_string):
@@ -167,10 +187,7 @@ def rejester_queue(request, _rejester_config, _namespace_string):
     config = dict(_rejester_config)
     config['namespace'] = _namespace_string
     q = RejesterQueue(config, 'queue')
-    def fin():
-        q.delete_namespace()
-    request.addfinalizer(fin)
-    return q
+    return _then_delete_namespace(request, q)
 
 @pytest.fixture(scope='function')
 def rejester_queue2(rejester_queue):

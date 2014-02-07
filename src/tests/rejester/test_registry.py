@@ -13,19 +13,17 @@ import pytest
 import rejester
 from rejester import Registry
 from rejester.exceptions import EnvironmentError
+from rejester.support.test import _then_delete_namespace
 
 logger = logging.getLogger(__name__)
 
 @pytest.fixture(scope='function')
-def registry(request, _rejester_config, _rejester_namespace):
+def registry(request, _rejester_config, _namespace_string):
     config = dict(_rejester_config)
     config['app_name'] = 'rejester_test'
-    config['namespace'] = _rejester_namespace
+    config['namespace'] = _namespace_string
     registry = Registry(config)
-    def fin():
-        registry.delete_namespace()
-    request.addfinalizer(fin)
-    return registry
+    return _then_delete_namespace(request, registry)
 
 
 def test_registry_decode(registry):
