@@ -5,7 +5,7 @@ clean:
 	python setup.py clean --all
 	rm -rf build dist src/rejester.egg-info runtests.py
 
-test: clean
+test: install
 	python setup.py install_test
 	py.test --genscript=runtests.py
 	cd src && python ../runtests.py --runperf -vvs -n 8 tests
