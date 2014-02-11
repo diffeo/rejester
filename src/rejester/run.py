@@ -21,7 +21,7 @@ import daemon
 import yaml
 
 from dblogger import configure_logging, FixedWidthFormatter
-from rejester import TaskMaster
+from rejester._task_master import TaskMaster
 from rejester.workers import run_worker, MultiWorker
 from yakonfig import set_global_config, get_global_config
 
@@ -209,13 +209,42 @@ class Manager(object):
                 raise
 
 
+def add_arguments(parser, defaults=None, include_app_name=False, include_namespace=False):
+    '''
+    add command line arguments to an argparse.ArgumentParser instance.
+    This provides sensible defaults and accurate help messages, so
+    that libraries that use kvlayer can provide these flags in their
+    command line interfaces.
+    '''
+    if  defaults is None:
+        defaults = dict()
+
+    if include_app_name:
+        parser.add_argument('--app-name', default=defaults.get('app_name'), 
+                            help='name of app for namespace prefixing')
+
+    ## standard flags that are unique to kvlayer
+    parser.add_argument('--registry-address', action='append', default=[], dest='registry_addresses',
+                        help='specify hostname:port for a registry server')
+
+def default_yaml():
+    '''
+    return default yaml string for use with yakonfig's !include_func
+    '''
+    return '''
+app_name:  !runtime app_name
+namespace: !runtime namespace
+registry_addresses: !runtime registry_addresses
+'''
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', help='must be one of: load, delete, status, run')
     parser.add_argument('namespace', help='data namespace in which to execute ACTION')
-    parser.add_argument('--app-name', help='app_name, defaults to "rejester"', default='rejester')
-    parser.add_argument('--registry-address', action='append', default=[], dest='registry_addresses',
-                        help='specify hostname:port for a registry server')
+
+    add_arguments(parser, defaults=dict(app_name='rejester'), include_app_name=True)
+
     parser.add_argument('--pidfile', default=None, help='PID lock file for use with action=run')
     parser.add_argument('-y', '--yes', default=False, action='store_true', dest='assume_yes',
                         help='Assume "yes" and require no input for confirmation questions.')
