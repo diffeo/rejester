@@ -263,9 +263,9 @@ def main():
 
     # If we were given a config file, load it
     if args.config is not None:
-        config = set_global_config(path=args.config)
+        config = set_global_config(args.config)
     else:
-        config = set_global_config(stream=StringIO('{}'))
+        config = set_global_config(StringIO('{}'))
 
     # Fill in more config options from args
     rejester_config = config.setdefault('rejester', {})
