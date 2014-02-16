@@ -14,7 +14,7 @@ build: clean
 	python setup.py build bdist_egg sdist
 
 install: build
-	python setup.py install
+	pip install .
 
 register:
         ## upload both source and binary
