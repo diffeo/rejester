@@ -237,13 +237,16 @@ namespace: !runtime namespace
 registry_addresses: !runtime registry_addresses
 '''
 
+default_config = dict(
+    app_name='rejester',
+    )
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', help='must be one of: load, delete, status, run')
     parser.add_argument('namespace', help='data namespace in which to execute ACTION')
 
-    add_arguments(parser, defaults=dict(app_name='rejester'), include_app_name=True)
+    add_arguments(parser, defaults=default_config, include_app_name=True)
 
     parser.add_argument('--pidfile', default=None, help='PID lock file for use with action=run')
     parser.add_argument('-y', '--yes', default=False, action='store_true', dest='assume_yes',
