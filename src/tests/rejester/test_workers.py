@@ -18,6 +18,7 @@ import rejester
 from rejester.workers import run_worker, MultiWorker
 
 logger = logging.getLogger(__name__)
+pytest_plugins = 'rejester.support.test'
 
 def test_task_register(task_master):
     worker = MultiWorker(task_master.registry.config)

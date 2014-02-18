@@ -135,9 +135,6 @@ setup(
         'console_scripts': [
             'rejester = rejester.run:main',
         ],
-        'pytest11': [
-            'rejester = rejester.support.test',
-        ]
     },
     zip_safe=False,  # so we can get into examples
 )

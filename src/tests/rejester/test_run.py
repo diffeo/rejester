@@ -18,15 +18,16 @@ import pexpect
 import pytest
 
 logger = logging.getLogger(__name__)
+pytest_plugins = 'rejester.support.test'
 
 @pytest.fixture
-def rejester_cli_namespace(request, _rejester_namespace):
+def rejester_cli_namespace(request, namespace_string):
     """a rejester namespace that deletes itself using 'rejester delete'"""
     def fin():
-        pexpect.run('rejester delete {0} --yes'.format(_rejester_namespace),
+        pexpect.run('rejester delete {0} --yes'.format(namespace_string),
                     logfile=sys.stdout, timeout=5)
     request.addfinalizer(fin)
-    return _rejester_namespace
+    return namespace_string
 
 def test_run(tmpdir, rejester_cli_namespace):
     """Lifecycle test for 'rejester run_worker'.

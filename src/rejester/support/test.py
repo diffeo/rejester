@@ -11,9 +11,8 @@ instance, leak namespaces in the underlying redis database.
 Implementation Notes
 ====================
 
-If rejester is already installed in your Python environment, these
-fixtures should be automatically available.  If not, you can add
-configuration to your test module
+You will need to tell pytest to load this module.  You can add to
+either your test module or a shared ``conftest.py`` file
 
 >>> pytest_plugins = 'rejester.support.test'
 
@@ -27,9 +26,10 @@ management.  Your test directory should also have a file named
 You can usually get the namespace string from the configuration of
 one of the high-level objects.  If you must manually work with the
 namespace string outside of the managed objects, you can call
-``make_namespace_string()`` or depend on the ``_rejester_namespace``
+``make_namespace_string()`` or depend on the ``namespace_string``
 fixture.
 
+-----
 
 This software is released under an MIT/X11 open source license.
 
@@ -48,22 +48,6 @@ import pytest
 import yaml
 
 from rejester import RejesterQueue, TaskMaster
-
-def make_namespace_string(test_name=''):
-    '''
-    generates a descriptive namespace for testing, which is unique to
-    this user and also this process ID and host running the test.
-
-    The returned string is never longer than 40 characters, and never
-    contains non-alphanumeric-underscore characters.  (It matches the
-    regular expression [a-zA-Z0-9_]{,40}.)
-    '''
-    return '_'.join([
-            re.sub('\W', '', test_name)[-23:], 
-            getpass.getuser().replace('-', '_')[:5],
-            str(os.getpid())[-5:],
-            hashlib.md5(socket.gethostname()).hexdigest()[:4],
-            ])
 
 def _then_delete_namespace(request, obj, registry=None):
     """Helper to delete a namespace on cleanup.
@@ -91,36 +75,10 @@ def _then_delete_namespace(request, obj, registry=None):
     return obj
 
 @pytest.fixture(scope='function')
-def _namespace_string(request):
-    """A dynamically namespace string.
-
-    This is used by other fixtures to ensure that they use the same
-    namespace.  If you use this directly, you are responsible for
-    cleaning up the namespace when your test ends.  This can be reused
-    by other components that have the notion of a "namespace".
-
-    """
-    return make_namespace_string(request.node.name)
-
-@pytest.fixture(scope='function')
-def _rejester_namespace(_namespace_string):
-    """A dynamically constructed rejester namespace.
-
-    This is used by other fixtures to ensure that they use the same
-    namespace.  If you use this directly, you are responsible for
-    cleaning up the namespace when your test ends.
-
-    *Deprecated:* use `_namespace_string` instead.  This string is
-     identical.
-
-    """
-    return _namespace_string
-
-@pytest.fixture(scope='function')
-def _namespace_string2(request):
+def namespace_string2(request):
     """A second dynamically constructed namespace string.
 
-    This is similar to `_namespace_string`, but is guaranteed to be
+    This is similar to `namespace_string`, but is guaranteed to be
     different.  Again, this is not managed on its own but is intended
     to be used by higher-level fixtures, and callers are responsible
     for ensuring that the namespace is cleaned up afterwards.
@@ -145,7 +103,7 @@ def _rejester_config(request):
         return {}
 
 @pytest.fixture(scope='function')
-def task_master(request, _rejester_config, _namespace_string):
+def task_master(request, _rejester_config, namespace_string):
     """A rejester TaskMaster for loading or querying work.
 
     The TaskMaster will have a dynamically created namespace.
@@ -155,12 +113,12 @@ def task_master(request, _rejester_config, _namespace_string):
 
     """
     config = dict(_rejester_config)
-    config['namespace'] = _namespace_string
+    config['namespace'] = namespace_string
     tm = TaskMaster(config)
     return _then_delete_namespace(request, tm, tm.registry)
 
 @pytest.fixture(scope='function')
-def task_master2(request, _rejester_config, _namespace_string2):
+def task_master2(request, _rejester_config, namespace_string2):
     """A rejester TaskMaster on a second namespace.
 
     The TaskMaster will have a dynamically created namespace, distinct
@@ -170,12 +128,12 @@ def task_master2(request, _rejester_config, _namespace_string2):
 
     """
     config = dict(_rejester_config)
-    config['namespace'] = _namespace_string2
+    config['namespace'] = namespace_string2
     tm = TaskMaster(config)
     return _then_delete_namespace(request, tm, tm.registry)
 
 @pytest.fixture(scope='function')
-def rejester_queue(request, _rejester_config, _namespace_string):
+def rejester_queue(request, _rejester_config, namespace_string):
     """A RejesterQueue that will die at the end of execution.
 
     The queue will will be named 'queue', and will have a dynamically
@@ -185,7 +143,7 @@ def rejester_queue(request, _rejester_config, _namespace_string):
 
     """
     config = dict(_rejester_config)
-    config['namespace'] = _namespace_string
+    config['namespace'] = namespace_string
     q = RejesterQueue(config, 'queue')
     return _then_delete_namespace(request, q)
 
