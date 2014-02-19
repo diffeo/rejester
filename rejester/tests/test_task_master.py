@@ -18,7 +18,7 @@ from rejester._task_master import WORK_UNITS_, _FINISHED
 from rejester.exceptions import LostLease
 
 logger = logging.getLogger(__name__)
-pytest_plugins = 'rejester.support.test'
+pytest_plugins = 'rejester.tests.fixtures'
 
 work_spec = dict(
     name = 'tbundle',

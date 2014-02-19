@@ -21,7 +21,7 @@ import yaml
 import rejester
 
 logger = logging.getLogger(__name__)
-pytest_plugins = 'rejester.support.test'
+pytest_plugins = 'rejester.tests.fixtures'
 
 ## 1KB sized work_spec config
 work_spec = dict(

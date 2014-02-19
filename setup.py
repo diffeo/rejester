@@ -97,8 +97,7 @@ setup(
     author=AUTHOR,
     author_email=AUTHOR_EMAIL,
     url=URL,
-    packages=find_packages('src', exclude=('tests', 'tests.*')),
-    package_dir={'': 'src'},
+    packages=find_packages(),
     cmdclass={'test': PyTest,
               'install_test': InstallTestDependencies},
     # We can select proper classifiers later

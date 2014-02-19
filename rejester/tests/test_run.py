@@ -18,7 +18,7 @@ import pexpect
 import pytest
 
 logger = logging.getLogger(__name__)
-pytest_plugins = 'rejester.support.test'
+pytest_plugins = 'rejester.tests.fixtures'
 
 @pytest.fixture
 def rejester_cli_namespace(request, namespace_string):

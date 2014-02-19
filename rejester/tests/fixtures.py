@@ -14,7 +14,7 @@ Implementation Notes
 You will need to tell pytest to load this module.  You can add to
 either your test module or a shared ``conftest.py`` file
 
->>> pytest_plugins = 'rejester.support.test'
+>>> pytest_plugins = 'rejester.tests.fixtures'
 
 Your tests will then have fixtures like ``task_master`` and
 ``rejester_queue`` available to them, with automatic namespace

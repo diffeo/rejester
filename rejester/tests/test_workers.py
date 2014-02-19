@@ -18,7 +18,7 @@ import rejester
 from rejester.workers import run_worker, MultiWorker
 
 logger = logging.getLogger(__name__)
-pytest_plugins = 'rejester.support.test'
+pytest_plugins = 'rejester.tests.fixtures'
 
 def test_task_register(task_master):
     worker = MultiWorker(task_master.registry.config)
@@ -54,7 +54,7 @@ work_spec = dict(
     desc = 'a test work bundle',
     min_gb = 8,
     config = dict(many=' ' * 2**10, params=''),
-    module = 'tests.rejester.test_workers',
+    module = 'rejester.tests.test_workers',
     run_function = 'work_program',
     terminate_function = 'work_program',
 )
