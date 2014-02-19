@@ -171,6 +171,7 @@ def test_task_master_multi_worker_failed_task(task_master):
     assert task_master.num_finished(work_spec['name']) == 0
 
 
+@pytest.mark.slow
 def test_task_master_multi_worker_multi_update(task_master):
     num_units = 10
     num_units_cursor = 0

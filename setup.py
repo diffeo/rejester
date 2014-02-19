@@ -133,6 +133,7 @@ setup(
     entry_points={
         'console_scripts': [
             'rejester = rejester.run:main',
+            'rejester_test = rejester.tests.run:main',
         ],
     },
     zip_safe=False,  # so we can get into examples

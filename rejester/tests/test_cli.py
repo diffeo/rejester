@@ -48,8 +48,11 @@ def test_cli(task_master, tmpdir):
             f.write(work_unit + '\n')
 
     namespace = task_master.registry.config['namespace']
-    child = pexpect.spawn('rejester load {} --app-name rejester_test '
-                          '-u {} -w {}'.format(namespace, tmpf2, tmpf),
+    redis = task_master.registry.config['registry_addresses'][0]
+    def r(action, params):
+        return ('rejester --registry-address {} --app-name rejester_test '
+                '{} {} {}'.format(redis, action, namespace, params))
+    child = pexpect.spawn(r('load', '-u {} -w {}'.format(tmpf2, tmpf)),
                           logfile=sys.stdout)
     try:
         child.expect('loading', timeout=5)
@@ -60,30 +63,26 @@ def test_cli(task_master, tmpdir):
 
     logger.debug(json.dumps(task_master.status(work_spec['name']), indent=4))
 
-    out = pexpect.run('rejester status {} --app-name rejester_test -w {}'
-                      .format(namespace, tmpf),
+    out = pexpect.run(r('status', '-w {}'.format(tmpf)),
                       timeout=5, logfile=sys.stdout)
     assert re.search('num_available.*{0}'.format(num_units), out)
 
-    out = pexpect.run('rejester work_units {} --app-name rejester_test -w {}'
-                      .format(namespace, tmpf),
+    out = pexpect.run(r('work_units', '-w {}'.format(tmpf)),
                       timeout=5, logfile=sys.stdout)
     assert out == ''.join(sorted(['key-{}\r\n'.format(n)
                                   for n in xrange(num_units)]))
 
     tmp_pid = str(tmpdir.join('pid'))
     tmp_log = str(tmpdir.join('log'))
-    out = pexpect.run('rejester run_worker {} --app-name rejester_test '
-                      '--logpath {} --pidfile {}'
-                      .format(namespace, tmp_log, tmp_pid),
+    out = pexpect.run(r('run_worker',
+                        '--logpath {} --pidfile {}'.format(tmp_log, tmp_pid)),
                       timeout=5, logfile=sys.stdout)
     assert os.path.exists(tmp_pid)
     pid = int(open(tmp_pid).read())
     try:
         os.kill(pid, 0) # will raise OSError if pid is dead
 
-        out = pexpect.run('rejester set_RUN {} --app-name rejester_test'
-                          .format(namespace),
+        out = pexpect.run(r('set_RUN', ''),
                           timeout=5, logfile=sys.stdout) 
         assert out.find('set') != -1
 

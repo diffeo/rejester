@@ -21,15 +21,17 @@ logger = logging.getLogger(__name__)
 pytest_plugins = 'rejester.tests.fixtures'
 
 @pytest.fixture
-def rejester_cli_namespace(request, namespace_string):
+def rejester_cli_namespace(request, namespace_string, _rejester_config):
     """a rejester namespace that deletes itself using 'rejester delete'"""
+    redis = _rejester_config['registry_addresses'][0]
     def fin():
-        pexpect.run('rejester delete {0} --yes'.format(namespace_string),
+        pexpect.run('rejester --registry-address {} delete {} --yes'
+                    .format(redis, namespace_string),
                     logfile=sys.stdout, timeout=5)
     request.addfinalizer(fin)
     return namespace_string
 
-def test_run(tmpdir, rejester_cli_namespace):
+def test_run(tmpdir, rejester_cli_namespace, _rejester_config):
     """Lifecycle test for 'rejester run_worker'.
 
     Running the top-level program starts a worker as a daemon process,
@@ -38,11 +40,13 @@ def test_run(tmpdir, rejester_cli_namespace):
 
     """
     namespace = rejester_cli_namespace
+    redis = _rejester_config['registry_addresses'][0]
     tmp_pid = str(tmpdir.join('pid'))
     tmp_log = str(tmpdir.join('log'))
     logger.info('pidfile=%r', tmp_pid)
-    pexpect.run('rejester run_worker {0} --pidfile {1} --logpath {2}'
-                .format(namespace, tmp_pid, tmp_log),
+    pexpect.run('rejester --registry-address {} run_worker {} --pidfile {} '
+                '--logpath {}'
+                .format(redis, namespace, tmp_pid, tmp_log),
                 logfile=sys.stdout,
                 timeout=5)
     # This spawns a daemon and exits, so run() should return promptly,

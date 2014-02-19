@@ -47,7 +47,7 @@ import socket
 import pytest
 import yaml
 
-from rejester import RejesterQueue, TaskMaster
+from rejester import RejesterQueue, TaskMaster, Registry
 
 def _then_delete_namespace(request, obj, registry=None):
     """Helper to delete a namespace on cleanup.
@@ -90,17 +90,34 @@ def namespace_string2(request):
 def _rejester_config(request):
     """Basic Rejester configuration.
 
-    If the test directory contains a file ``config_registry.yaml``,
-    the configuration is loaded from there.  Otherwise this returns
-    an empty dictionary.
+    If the test system was started with a --redis-address command-line
+    parameter, generate the configuration from that.  If the test
+    directory contains a file ``config_registry.yaml``, the
+    configuration is loaded from there.  Otherwise this returns an
+    empty dictionary.
 
     """
+    redis = request.config.getoption('--redis-address')
+    if redis is not None:
+        return { 'registry_addresses': [ redis ] }
     config_path = request.fspath.new(basename='config_registry.yaml')
     try:
         with config_path.open('r') as f:
             return yaml.load(f)
     except OSError, exc:
         return {}
+
+@pytest.fixture(scope='function')
+def registry(request, _rejester_config, namespace_string):
+    """A standalone rejester Registry.
+
+    This is a lower-level object that can directly access the Redis
+    database.  Most tests will not need to access this."""
+    config = dict(_rejester_config)
+    config['app_name'] = 'rejester_test'
+    config['namespace'] = namespace_string
+    registry = Registry(config)
+    return _then_delete_namespace(request, registry)
 
 @pytest.fixture(scope='function')
 def task_master(request, _rejester_config, namespace_string):

@@ -11,21 +11,10 @@ import time
 import pytest
 
 import rejester
-from rejester import Registry
 from rejester.exceptions import EnvironmentError
-from rejester.tests.fixtures import _then_delete_namespace
 
 logger = logging.getLogger(__name__)
 pytest_plugins = 'rejester.tests.fixtures'
-
-@pytest.fixture(scope='function')
-def registry(request, _rejester_config, namespace_string):
-    config = dict(_rejester_config)
-    config['app_name'] = 'rejester_test'
-    config['namespace'] = namespace_string
-    registry = Registry(config)
-    return _then_delete_namespace(request, registry)
-
 
 def test_registry_decode(registry):
     for foo in [{}, None, '', 0, 1]:
