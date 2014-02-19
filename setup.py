@@ -106,7 +106,15 @@ setup(
         'Topic :: Utilities',
         'License :: OSI Approved :: MIT License',  ## MIT/X11 license http://opensource.org/licenses/MIT
     ],
-    tests_require=[
+    install_requires=[
+        'dblogger',
+        'yakonfig >= 0.3.0',
+        'gevent',
+        'pyyaml',
+        'redis',
+        'psutil',
+        'python-daemon',
+        # ], tests_require=[
         'pexpect',
         'pytest',
         'ipdb',
@@ -117,15 +125,6 @@ setup(
         'pytest-capturelog',
         'epydoc',
         'pytest-diffeo',
-    ],
-    install_requires=[
-        'dblogger',
-        'yakonfig >= 0.3.0',
-        'gevent',
-        'pyyaml',
-        'redis',
-        'psutil',
-        'python-daemon',
     ],
     data_files=[
         ('rejester/examples', recursive_glob('src/examples', '*.*')),
