@@ -21,9 +21,10 @@ import daemon
 import yaml
 
 from dblogger import configure_logging, FixedWidthFormatter
+import rejester
 from rejester._task_master import TaskMaster
 from rejester.workers import run_worker, MultiWorker
-from yakonfig import set_global_config, get_global_config
+import yakonfig
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,8 @@ class MissingArgumentError(Exception):
     pass
 
 class Manager(object):
-    def __init__(self, config):
-        self.config = config
+    def __init__(self):
+        self.config = yakonfig.get_global_config('rejester')
         self._task_master = None
 
     @property
@@ -192,7 +193,7 @@ class Manager(object):
                     open(pidfile,'w').write(str(os.getpid()))
                 # Holding loggers open across DaemonContext is a big
                 # problem; establish them for the first time here
-                configure_logging(get_global_config())
+                configure_logging(yakonfig.get_global_config())
                 if logpath:
                     formatter = FixedWidthFormatter()
                     # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
@@ -209,45 +210,10 @@ class Manager(object):
                 raise
 
 
-def add_arguments(parser, defaults=None, include_app_name=False, include_namespace=False):
-    '''
-    add command line arguments to an argparse.ArgumentParser instance.
-    This provides sensible defaults and accurate help messages, so
-    that libraries that use kvlayer can provide these flags in their
-    command line interfaces.
-    '''
-    if  defaults is None:
-        defaults = dict()
-
-    if include_app_name:
-        parser.add_argument('--app-name', default=defaults.get('app_name'), 
-                            help='name of app for namespace prefixing')
-
-    ## standard flags that are unique to kvlayer
-    parser.add_argument('--registry-address', action='append', default=[], dest='registry_addresses',
-                        help='specify hostname:port for a registry server')
-
-def default_yaml():
-    '''
-    return default yaml string for use with yakonfig's !include_func
-    '''
-    return '''
-app_name:  !runtime app_name
-namespace: !runtime namespace
-registry_addresses: !runtime registry_addresses
-'''
-
-default_config = dict(
-    app_name='rejester',
-    )
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', help='must be one of: load, delete, status, run')
     parser.add_argument('namespace', help='data namespace in which to execute ACTION')
-
-    add_arguments(parser, defaults=default_config, include_app_name=True)
-
     parser.add_argument('--pidfile', default=None, help='PID lock file for use with action=run')
     parser.add_argument('-y', '--yes', default=False, action='store_true', dest='assume_yes',
                         help='Assume "yes" and require no input for confirmation questions.')
@@ -258,28 +224,9 @@ def main():
     parser.add_argument('-u', '--work-units', default='-', dest='work_units_path',
                         help='path to file with one JSON record per line, each describing a Work Unit')
     parser.add_argument('--logpath', default=None)
-    parser.add_argument('-c', '--config', default=None, metavar='config.yaml',
-                        help='path to configuration file')
     parser.add_argument('-v', '--verbose', default=False, action='store_true',
                         help='include more information in output')
-    args = parser.parse_args()
-
-    # If we were given a config file, load it
-    if args.config is not None:
-        config = set_global_config(args.config)
-    else:
-        config = set_global_config(StringIO('{}'))
-
-    # Fill in more config options from args
-    rejester_config = config.setdefault('rejester', {})
-    if args.app_name is not None: rejester_config['app_name'] = args.app_name
-    if args.registry_addresses != []:
-        rejester_config['registry_addresses'] = args.registry_addresses
-    rejester_config['namespace'] = args.namespace
-
-    # Default values
-    rejester_config.setdefault('app_name', 'rejester')
-    rejester_config.setdefault('registry_addresses', ['redis.diffeo.com:6379'])
+    args = yakonfig.parse_args(parser, [yakonfig, rejester])
 
     # Split actions by comma, and execute them in sequence
     actions = args.action.split(',')
@@ -289,9 +236,9 @@ def main():
 
     # run_worker is Very Special; anything else needs to set up logging now
     if 'run_worker' not in actions:
-        configure_logging(config)
+        configure_logging(yakonfig.get_global_config())
 
-    mgr = Manager(rejester_config)
+    mgr = Manager()
 
     for action_string in actions:
         action = getattr(mgr, action_string)

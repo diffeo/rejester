@@ -5,7 +5,9 @@ This software is released under an MIT/X11 open source license.
 
 Copyright 2012-2014 Diffeo, Inc.
 '''
-from run import default_yaml, add_arguments, default_config
-from _task_master import TaskMaster
-from _queue import RejesterQueue
-from _registry import Registry
+from __future__ import absolute_import
+from rejester.config import config_name, default_config, add_arguments, \
+    runtime_keys, check_config
+from rejester._task_master import TaskMaster
+from rejester._queue import RejesterQueue
+from rejester._registry import Registry
