@@ -19,7 +19,7 @@ from operator import itemgetter
 
 from rejester._registry import Registry
 from rejester.exceptions import ProgrammerError, LockError, \
-    LostLease, EnvironmentError
+    LostLease, EnvironmentError, NoSuchWorkSpecError
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,9 @@ BUNDLES = 'bundles'
 NICE_LEVELS = 'NICE_LEVELS'
 WORK_SPECS = 'WORK_SPECS'
 WORK_UNITS_ = 'WORK_UNITS_'
+_BLOCKED = '_BLOCKED'
+_BLOCKS = '_BLOCKS'
+_DEPENDS = '_DEPENDS'
 _FINISHED = '_FINISHED'
 _FAILED = '_FAILED'
 WORKER_STATE_ = 'WORKER_STATE_'
@@ -215,6 +218,26 @@ class WorkUnit(object):
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FINISHED,
                 {self.key: self.data})
+            blocks = session.get(WORK_UNITS_ + self.work_spec_name + _BLOCKS,
+                                 self.key)
+            if blocks is not None:
+                for block in blocks:
+                    spec = block[0]
+                    unit = block[1]
+                    hard = block[2]
+                    depends = session.get(WORK_UNITS_ + spec + _DEPENDS, unit)
+                    if depends is None: continue
+                    depends.remove([self.work_spec_name, self.key])
+                    if len(depends) == 0:
+                        session.popmany(WORK_UNITS_ + spec + _DEPENDS, unit)
+                        unitdef = session.get(WORK_UNITS_ + spec + _BLOCKED,
+                                              unit)
+                        session.move(WORK_UNITS_ + spec + _BLOCKED,
+                                     WORK_UNITS_ + spec,
+                                     { unit: unitdef })
+                    else:
+                        session.set(WORK_UNITS_ + spec + _DEPENDS, unit,
+                                    depends)
         self.finished = True
 
     def fail(self, exc=None):
@@ -232,21 +255,69 @@ class WorkUnit(object):
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FAILED,
                 {self.key: self.data})
+            blocks = session.get(WORK_UNITS_ + self.work_spec_name + _BLOCKS,
+                                 self.key)
+            if blocks is not None:
+                for block in blocks:
+                    spec = block[0]
+                    unit = block[1]
+                    hard = block[2]
+                    if hard:
+                        session.popmany(WORK_UNITS_ + spec + _DEPENDS, unit)
+                        unitdef = session.get(WORK_UNITS_ + spec + _BLOCKED,
+                                              unit)
+                        if unitdef is not None:
+                            session.move(WORK_UNITS_ + spec + _BLOCKED,
+                                         WORK_UNITS_ + spec + _FAILED,
+                                         { unit: unitdef })
+                    else:
+                        depends = session.get(WORK_UNITS_ + spec + _DEPENDS, unit)
+                        if depends is None: continue
+                        depends.remove([self.work_spec_name, self.key])
+                        if len(depends) == 0:
+                            session.popmany(WORK_UNITS_ + spec + _DEPENDS, unit)
+                            unitdef = session.get(WORK_UNITS_ + spec + _BLOCKED,
+                                                  unit)
+                            if unitdef is not None:
+                                session.move(WORK_UNITS_ + spec + _BLOCKED,
+                                             WORK_UNITS_ + spec,
+                                             { unit: unitdef })
+                        else:
+                            session.set(WORK_UNITS_ + spec + _DEPENDS, unit,
+                                        depends)
         self.failed = True
 
 
 class TaskMaster(object):
-    '''
-    work_spec = dict(
-        name = 
-        desc = 
-        min_gb = 
-        config = dict -- like we have in yaml files now
-        work_unit = tuple -- like we emit with i_str now in streamcorpus.pipeline
-    )
+    '''Control object for the rejester task queue.
 
-    operations:
-      update bundle -- appends latest work_spec to list
+    The task queue consists of a series of *work specs*, which include
+    configuration information, and each work spec has some number of
+    *work units* attached to it.  Both the work specs and work units
+    are defined as (non-empty) dictionaries.  The work spec must have
+    keys 'name' and 'min_gb'; in typical use, 'module' names a Python
+    module, 'run_function' and 'terminate_function' name specific
+    functions within that module, and 'config' provides a
+    configuration dictionary as well.
+
+    A work unit can be in one of five states.  It is *available* if it
+    has been added to the queue but nobody is working on it.  It is
+    *pending* if somebody is currently working on it.  When they
+    finish, it will become either *finished* or *failed*.  If
+    dependencies are added between tasks using `add_dependent_task()`,
+    a task can also be *blocked*.
+
+    The general flow for a rejester application is to
+    `set_mode(IDLE)`, then add work units using `update_bundle()`, and
+    `set_mode(RUN)`.  `get_work()` will return work units until all
+    have been consumed.  `set_mode(TERMINATE)` will instruct workers
+    to shut down.
+
+    This object keeps very little state locally and can safely be used
+    concurrently, including from multiple systems.  Correspondingly,
+    any settings here, including `set_mode()`, are persistent even
+    beyond the end of the current process.
+
     '''
 
     def __init__(self, config):
@@ -259,7 +330,17 @@ class TaskMaster(object):
     TERMINATE = 'TERMINATE'
 
     def set_mode(self, mode):
-        'set the mode to TERMINATE, RUN, or IDLE'
+        '''Set the global mode of the rejester system.
+
+        This must be one of the constants `TERMINATE`, `RUN`, or `IDLE`.
+        `TERMINATE` instructs any running workers to do an orderly
+        shutdown.  `IDLE` instructs workers to stay running but not
+        start new jobs.  `RUN` tells workers to do actual work.
+
+        :param str mode: new rejester mode
+        :raise ProgrammerError: on invalid `mode`
+
+        '''
         if not mode in [self.TERMINATE, self.RUN, self.IDLE]:
             raise ProgrammerError('mode=%r is not recognized' % mode)
         with self.registry.lock() as session:
@@ -267,7 +348,11 @@ class TaskMaster(object):
         logger.info('set mode to %s', mode)
 
     def get_mode(self):
-        'returns mode, defaults to IDLE'
+        '''Get the global mode of the rejester system.
+
+        :return: rejester mode, `IDLE` if unset
+
+        '''
         with self.registry.lock() as session:
             return session.get('modes', 'mode') or self.IDLE
 
@@ -302,6 +387,35 @@ class TaskMaster(object):
                 WORKER_OBSERVED_MODE, 
                 priority_min=alive and time.time() or None)
 
+    def dump(self):
+        '''Print the entire contents of this to debug log messages.
+
+        This is really only intended for debugging.  It could produce
+        a lot of data.
+
+        '''
+        with self.registry.lock() as session:
+            for work_spec_name in self.registry.pull(NICE_LEVELS).iterkeys():
+                def scan(sfx):
+                    v = self.registry.pull(WORK_UNITS_ + work_spec_name + sfx)
+                    if v is None: return []
+                    return v.keys()
+                for key in scan(''):
+                    logger.debug('spec {} unit {} available or pending'
+                                 .format(work_spec_name, key))
+                for key in scan(_BLOCKED):
+                    blocked_on = self.registry.get(
+                        WORK_UNITS_ + work_spec_name + _DEPENDS, key)
+                    logger.debug('spec {} unit {} blocked on {!r}'
+                                 .format(work_spec_name, key, blocked_on))
+                for key in scan(_FINISHED):
+                    logger.debug('spec {} unit {} finished'
+                                 .format(work_spec_name, key))
+                for key in scan(_FAILED):
+                    logger.debug('spec {} unit {} failed'
+                                 .format(work_spec_name, key))
+
+
     @classmethod
     def validate_work_spec(cls, work_spec):
         'raise ProgrammerError if work_spec is invalid'
@@ -319,6 +433,9 @@ class TaskMaster(object):
         return self.registry.len(WORK_UNITS_ + work_spec_name, 
                                  priority_min=time.time())
 
+    def num_blocked(self, work_spec_name):
+        return self.registry.len(WORK_UNITS_ + work_spec_name + _BLOCKED)
+
     def num_finished(self, work_spec_name):
         return self.registry.len(WORK_UNITS_ + work_spec_name + _FINISHED)
 
@@ -334,6 +451,7 @@ class TaskMaster(object):
         return dict(
             num_available=self.num_available(work_spec_name),
             num_pending=self.num_pending(work_spec_name),
+            num_blocked=self.num_blocked(work_spec_name),
             num_finished=self.num_finished(work_spec_name),
             num_failed=self.num_failed(work_spec_name),
             num_tasks=self.num_tasks(work_spec_name),
@@ -352,16 +470,31 @@ class TaskMaster(object):
             return session.pull(WORK_UNITS_ + work_spec_name)
 
     def inspect_work_unit(self, work_spec_name, work_unit_key):
-        '''
-        returns work_unit.data
+        '''Get the data for some work unit.
+
+        Returns the data for that work unit, or `None` if it really
+        can't be found.
+
+        :param str work_spec_name: name of the work spec
+        :param str work_unit_key: name of the work unit
+        :return: definition of the work unit, or `None`
         '''
         with self.registry.lock(atime=1000) as session:
             work_unit_data = session.get(
                 WORK_UNITS_ + work_spec_name, work_unit_key)
             if not work_unit_data:
                 work_unit_data = session.get(
+                    WORK_UNITS_ + work_spec_name + _BLOCKED, work_unit_key)
+            if not work_unit_data:
+                work_unit_data = session.get(
                     WORK_UNITS_ + work_spec_name + _FINISHED, work_unit_key)
+            if not work_unit_data:
+                work_unit_data = session.get(
+                    WORK_UNITS_ + work_spec_name + _FAILED, work_unit_key)
             return work_unit_data
+
+    def _inspect_work_unit(self, session, work_spec_name, work_unit_key):
+        return work_unit_data
 
 
     def reset_all(self, work_spec_name):
@@ -393,7 +526,141 @@ class TaskMaster(object):
                 self.registry.re_acquire_lock(ltime=2000)
                 session.update(WORK_UNITS_ + work_spec_name, 
                                dict(work_units[i: i + window_size]))
-                logger.debug('%d:%d', i, i + window_size)
+
+    def add_dependent_work_units(self, work_unit, depends_on, hard=True):
+        """Add work units, where one prevents execution of the other.
+
+        The two work units may be attached to different work specs,
+        but both must be in this task master's namespace.  `work_unit`
+        and `depends_on` are both tuples of (work spec name, work unit
+        name, work unit dictionary).  The work specs must already
+        exist; they may be created with `update_bundle()` with an
+        empty work unit dictionary.  If a work unit dictionary is
+        provided with either work unit, then this defines that work
+        unit, and any existing definition is replaced.  Either or both
+        work unit dictionaries may be `None`, in which case the work
+        unit is not created if it does not already exist.  In this
+        last case, the other work unit will be added if specified, but
+        the dependency will not be added, and this function will
+        return False.  In all other cases, this dependency is added in
+        addition to all existing dependencies on either or both work
+        units, even if the work unit dictionary is replaced.
+
+        `work_unit` will not be executed or reported as available via
+        `get_work()` until `depends_on` finishes execution.  If the
+        `depends_on` task fails, then the `hard` parameter describes
+        what happens: if `hard` is `True` then `work_unit` will also
+        fail, but if `hard` is `False` then `work_unit` will be able
+        to execute even if `depends_on` fails, it just must have
+        completed some execution attempt.
+
+        Calling this function with ``hard=True`` suggests an ordered
+        sequence of tasks where the later task depends on the output
+        of the earlier tasks.  Calling this function with
+        ``hard=False`` suggests a cleanup task that must run after
+        this task (and, likely, several others) are done, but doesn't
+        specifically depend on its result being available.
+
+        :param work_unit: "Later" work unit to execute
+        :paramtype work_unit: tuple of (str,str,dict)
+        :param depends_on: "Earlier" work unit to execute
+        :paramtype depends_on: tuple of (str,str,dict)
+        :param bool hard: if True, then `work_unit` automatically fails
+          if `depends_on` fails
+        :return: True, unless one or both of the work units didn't exist
+          and weren't specified, in which case, False
+        :raise NoSuchWorkSpecError: if a work spec was named that doesn't
+          exist
+
+        """
+        # There's no good, not-confusing terminology here.
+        # I'll call work_unit "later" and depends_on "earlier"
+        # consistently, because that at least makes the time flow
+        # correct.
+        later_spec, later_unit, later_unitdef = work_unit
+        earlier_spec, earlier_unit, earlier_unitdef = depends_on
+        with self.registry.lock(atime=1000) as session:
+            # Bail if either work spec doesn't already exist
+            if session.get(WORK_SPECS, later_spec) is None:
+                raise NoSuchWorkSpecError(later_spec)
+            if session.get(WORK_SPECS, earlier_spec) is None:
+                raise NoSuchWorkSpecError(earlier_spec)
+            
+            # Cause both work units to exist (if possible)
+            # Note that if "earlier" is already finished, we may be
+            # able to make "later" available immediately
+            earlier_done = False
+            earlier_successful = False
+            if earlier_unitdef is not None:
+                session.update(WORK_UNITS_ + earlier_spec,
+                               { earlier_unit: earlier_unitdef })
+            else:
+                earlier_unitdef = session.get(
+                    WORK_UNITS_ + earlier_spec, earlier_unit)
+                if earlier_unitdef is None:
+                    earlier_unitdef = session.get(
+                        WORK_UNITS_ + earlier_spec + _BLOCKED, earlier_unit)
+                if earlier_unitdef is None:
+                    earlier_unitdef = session.get(
+                        WORK_UNITS_ + earlier_spec + _FINISHED, earlier_unit)
+                    if earlier_unitdef is not None:
+                        earlier_done = True
+                        earlier_successful = True
+                if earlier_unitdef is None:
+                    earlier_unitdef = session.get(
+                        WORK_UNITS_ + earlier_spec + _FAILED, earlier_unit)
+                    if earlier_unitdef is not None:
+                        earlier_done = True
+
+            later_failed = earlier_done and hard and not earlier_successful
+            later_unblocked = ((earlier_done and not later_failed) or
+                               (earlier_unitdef is None))
+            if later_failed:
+                later_destination = WORK_UNITS_ + later_spec + _FAILED
+            elif later_unblocked:
+                later_destination = WORK_UNITS_ + later_spec
+            else:
+                later_destination = WORK_UNITS_ + later_spec + _BLOCKED
+
+            if later_unitdef is not None:
+                for suffix in ['', _FINISHED, _FAILED, _BLOCKED]:
+                    k = WORK_UNITS_ + later_spec + suffix
+                    if k != later_destination:
+                        session.popmany(k, later_unit)
+                session.update(later_destination,
+                               { later_unit: later_unitdef })
+            elif earlier_unitdef is not None:
+                later_unitdef = session.get(
+                    WORK_UNITS_ + later_spec, later_unit)
+                if later_unitdef is not None:
+                    session.move(
+                        WORK_UNITS_ + later_spec,
+                        WORK_UNITS_ + later_spec + _BLOCKED,
+                        { later_unit: later_unitdef })
+                else:
+                    later_unitdef = session.get(
+                        WORK_UNITS_ + later_spec + _BLOCKED, later_unit)
+
+            if later_unitdef is None or earlier_unitdef is None:
+                return False
+
+            # Now both units exist and are in the right place;
+            # record the dependency
+            blocks = session.get(WORK_UNITS_ + earlier_spec + _BLOCKS,
+                                 earlier_unit)
+            if blocks is None: blocks = []
+            blocks.append([later_spec, later_unit, hard])
+            session.set(WORK_UNITS_ + earlier_spec + _BLOCKS,
+                        earlier_unit, blocks)
+
+            depends = session.get(WORK_UNITS_ + later_spec + _DEPENDS,
+                                  later_unit)
+            if depends is None: depends = []
+            depends.append([earlier_spec, earlier_unit])
+            session.set(WORK_UNITS_ + later_spec + _DEPENDS,
+                        later_unit, depends)
+
+            return True
 
     def nice(self, work_spec_name, nice):        
         with self.registry.lock(atime=1000) as session:

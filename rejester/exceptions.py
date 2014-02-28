@@ -3,7 +3,7 @@ http://github.com/diffeo/rejester
 
 This software is released under an MIT/X11 open source license.
 
-Copyright 2012-2013 Diffeo, Inc.
+Copyright 2012-2014 Diffeo, Inc.
 '''
 
 class RejesterException(Exception):
@@ -17,6 +17,10 @@ failure that probably indicates a network or remote server failure'''
 
 class LockError(RejesterException):
     'attempt to get a lock exceeded acquire time (atime)'
+    pass
+
+class NoSuchWorkSpecError(RejesterException):
+    """A `TaskMaster` function was called with a nonexistent work spec"""
     pass
 
 class ProgrammerError(RejesterException):

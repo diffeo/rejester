@@ -27,27 +27,60 @@ from rejester._redis import RedisBase
 logger = logging.getLogger(__name__)
 
 class Registry(RedisBase):
-    '''provides a centralized storage mechanism for dictionaries,
-including atomic operations for moving (key, value) pairs between
-dictionaries, and incrementing counts.
+    '''Store string-keyed dictionaries in Redis.
 
-This makes extensive use of Lua scripts in redis.
-    http://redis.io/commands/eval
+    Provides a centralized storage mechanism for dictionaries,
+    including atomic operations for moving (key, value) pairs between
+    dictionaries, and incrementing counts.
 
-Atomicity of scripts: Redis uses the same Lua interpreter to run all
-the commands. Also Redis guarantees that a script is executed in an
-atomic way: no other script or Redis command will be executed while a
-script is being executed. This semantics is very similar to the one of
-MULTI / EXEC. From the point of view of all the other clients the
-effects of a script are either still not visible or already completed.
+    Most operations on the registry require getting a lock via
+    the database, for instance
 
-However this also means that executing slow scripts is not a good
-idea. It is not hard to create fast scripts, as the script overhead is
-very low, but if you are going to use slow scripts you should be aware
-that while the script is running no other client can execute commands
-since the server is busy.
+    >>> with registry.lock() as session:
+    ...   value = session.get(k1, k2)
+
+    The lock mechanism ensures that no two Registry objects do work
+    concurrently, even running on separate systems.
+
+    The basic data object is a string-keyed dictionary stored under
+    some key.  The dictionary keys are also stored in a prioritized
+    list.  This in effect provides two levels of dictionary, using the
+    Redis key and the dictionary key.  The registry makes an effort to
+    store all types of object as values, potentially serializing them
+    into JSON.  Core operations include
+
+    `update(key, {'k': 'v'})` adds items to a dictionary
+
+    `popmany(key, 'k1', 'k2')` removes values from a dictionary
+
+    `len(key)` returns the number of items in a dictionary
+
+    `getitem_reset(key)` returns the highest-priority item, leaving it
+    in the queue with a new priority
+
+    `popitem(key)` returns the highest-priority item, removing it
+
+    `popitem_move(key1, key2)` moves the highest-priority item from
+    `key1` to `key2`
+
+    `move(key1, key2, {'k': anything})` moves values between dictionaries
+
+    `move_all(key1, key2)` moves everything from one dictionary to another
+
+    `pull(key1)` gets the entire contents of a dictionary
+
+    `increment(key, 'k')` gets an increasing numeric value
+
+    `get(key, 'k')`, `set(key, 'k', 'v')`, `delete(key)` do what they
+    sound like
 
     '''
+
+    # This makes extensive use of Lua scripts in Redis; see
+    # http://redis.io/commands/eval for basics.  This provides atomicity
+    # (Redis never runs anything in parallel with a Lua script), but
+    # also means that much of the logic is in a hard-to-watch script,
+    # and that performance of these scripts is pretty critical.
 
     def __init__(self, config):
         '''
