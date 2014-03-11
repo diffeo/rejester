@@ -260,32 +260,28 @@ class Registry(RedisBase):
                locks=None):
         '''Add mapping to a dictionary, replacing previous values
 
-        :param mapping: a dict of keys and values to update in
-        dict_name.  Must be specified if priorities is specified.
-
-        :param priorities: a dict with the same keys as those in
-        mapping that provides a numerical value indicating the
-        priority to assign to that key.  Default sets 0 for all keys.
-
-        :param expire: if specified, then dict_name will be set to
-        expire in that many seconds.
-        :type expire: int
-
         Can be called with only dict_name and expire to refresh the
         expiration time.
-
-        :param locks: a dict with the same keys as those in the
-        mapping.  Before making any particular update, this function
-        checks if a key is present in a 'locks' table for this dict,
-        and if so, then its value must match the value provided in the
-        input locks dict for that key.  If not, then the value
-        provided in the locks dict is inserted into the 'locks' table.
-        If the locks parameter is None, then no lock checking is
-        performed.
 
         NB: locks are only enforced if present, so nothing prevents
         another caller from coming in an modifying data without using
         locks.
+
+        :param mapping: a dict of keys and values to update in
+          dict_name.  Must be specified if priorities is specified.
+        :param priorities: a dict with the same keys as those in
+          mapping that provides a numerical value indicating the
+          priority to assign to that key.  Default sets 0 for all keys.
+        :param int expire: if specified, then dict_name will be set to
+          expire in that many seconds.
+        :param locks: a dict with the same keys as those in the
+          mapping.  Before making any particular update, this function
+          checks if a key is present in a 'locks' table for this dict,
+          and if so, then its value must match the value provided in the
+          input locks dict for that key.  If not, then the value
+          provided in the locks dict is inserted into the 'locks' table.
+          If the locks parameter is None, then no lock checking is
+          performed.
         '''
         if self._lock_name is None:
             raise ProgrammerError('must acquire lock first')

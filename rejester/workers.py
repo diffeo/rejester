@@ -1,7 +1,7 @@
-'''
-This software is released under an MIT/X11 open source license.
+'''Rejester workers.
 
-Copyright 2012-2013 Diffeo, Inc.
+.. This software is released under an MIT/X11 open source license.
+   Copyright 2012-2013 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 import os
@@ -18,8 +18,8 @@ from signal import signal, SIGHUP, SIGTERM, SIGABRT
 from operator import itemgetter
 from collections import deque
 
-from rejester._task_master import TaskMaster, Worker, \
-    WORKER_OBSERVED_MODE, WORKER_STATE_
+from rejester import TaskMaster, Worker
+from rejester._task_master import WORKER_OBSERVED_MODE, WORKER_STATE_
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,14 @@ def test_work_program(work_unit):
     logger.info('finished %r' % work_unit)
 
 def run_worker(worker_class, *args, **kwargs):
-    '''multiprocessing cannot apply_async to a class constructor, even if
-    the __init__ calls .run(), so this simple wrapper calls
-    worker_class(*args, **kwargs) and logs any exceptions before
+    '''Bridge function to run a worker under :mod:`multiprocessing`.
+
+    The :mod:`multiprocessing` module cannot
+    :func:`~multiprocessing.apply_async` to a class constructor, even
+    if the ``__init__`` calls ``.run()``, so this simple wrapper calls
+    ``worker_class(*args, **kwargs)`` and logs any exceptions before
     re-raising them.
+
     '''
     try:
         worker = worker_class(*args, **kwargs)

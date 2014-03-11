@@ -1,9 +1,8 @@
-'''
-http://github.com/diffeo/rejester
+'''External API for rejester task system.
 
-This software is released under an MIT/X11 open source license.
+.. This software is released under an MIT/X11 open source license.
+   Copyright 2012-2013 Diffeo, Inc.
 
-Copyright 2012-2013 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 from __future__ import division
@@ -505,12 +504,15 @@ class TaskMaster(object):
             session.reset_priorities(WORK_UNITS_ + work_spec_name, 0)
 
     def update_bundle(self, work_spec, work_units, nice=0):
-        '''update the work_spec and work_units.  Overwrites any existing
-        work_spec with the same work_spec['name'] and similarly
-        overwrites any WorkUnit with the same work_unit.key
+        '''Load a work spec and some work units into the task list.
+        
+        update the work_spec and work_units.  Overwrites any existing
+        work_spec with the same ``work_spec['name']`` and similarly
+        overwrites any WorkUnit with the same ``work_unit.key``
 
         :param work_units: dict of dicts where the keys are used as
-        WorkUnit.key and the values are used as WorkUnit.data
+          WorkUnit.key and the values are used as WorkUnit.data
+
         '''
         self.validate_work_spec(work_spec)
         
@@ -534,25 +536,26 @@ class TaskMaster(object):
         but both must be in this task master's namespace.  `work_unit`
         and `depends_on` are both tuples of (work spec name, work unit
         name, work unit dictionary).  The work specs must already
-        exist; they may be created with `update_bundle()` with an
-        empty work unit dictionary.  If a work unit dictionary is
+        exist; they may be created with :meth:`update_bundle` with
+        an empty work unit dictionary.  If a work unit dictionary is
         provided with either work unit, then this defines that work
         unit, and any existing definition is replaced.  Either or both
-        work unit dictionaries may be `None`, in which case the work
-        unit is not created if it does not already exist.  In this
-        last case, the other work unit will be added if specified, but
-        the dependency will not be added, and this function will
-        return False.  In all other cases, this dependency is added in
-        addition to all existing dependencies on either or both work
-        units, even if the work unit dictionary is replaced.
+        work unit dictionaries may be :const:`None`, in which case the
+        work unit is not created if it does not already exist.  In
+        this last case, the other work unit will be added if
+        specified, but the dependency will not be added, and this
+        function will return :const:`False`.  In all other cases, this
+        dependency is added in addition to all existing dependencies
+        on either or both work units, even if the work unit dictionary
+        is replaced.
 
         `work_unit` will not be executed or reported as available via
-        `get_work()` until `depends_on` finishes execution.  If the
-        `depends_on` task fails, then the `hard` parameter describes
-        what happens: if `hard` is `True` then `work_unit` will also
-        fail, but if `hard` is `False` then `work_unit` will be able
-        to execute even if `depends_on` fails, it just must have
-        completed some execution attempt.
+        :meth:`get_work` until `depends_on` finishes execution.  If
+        the `depends_on` task fails, then the `hard` parameter
+        describes what happens: if `hard` is :const:`True` then
+        `work_unit` will also fail, but if `hard` is :const:`False`
+        then `work_unit` will be able to execute even if `depends_on`
+        fails, it just must have completed some execution attempt.
 
         Calling this function with ``hard=True`` suggests an ordered
         sequence of tasks where the later task depends on the output
@@ -567,8 +570,8 @@ class TaskMaster(object):
         :paramtype depends_on: tuple of (str,str,dict)
         :param bool hard: if True, then `work_unit` automatically fails
           if `depends_on` fails
-        :return: True, unless one or both of the work units didn't exist
-          and weren't specified, in which case, False
+        :return: :const:`True`, unless one or both of the work units
+          didn't exist and weren't specified, in which case, :const:`False`
         :raise NoSuchWorkSpecError: if a work spec was named that doesn't
           exist
 
@@ -671,11 +674,9 @@ class TaskMaster(object):
         worker process.  
         
         :param worker_id: unique identifier string for a worker to
-        which a WorkUnit will be assigned, if available.
-
+          which a WorkUnit will be assigned, if available.
         :param available_gb: number of gigabytes of RAM available to
-        this worker
-
+          this worker
         :param lease_time: how many seconds to lease a WorkUnit
 
         '''
@@ -753,5 +754,3 @@ class TaskMaster(object):
                 work_unit_key, work_unit_data,
                 worker_id=worker_id,                            
             )
-
-             
