@@ -25,7 +25,7 @@ def rejester_cli_namespace(request, namespace_string, _rejester_config):
     """a rejester namespace that deletes itself using 'rejester delete'"""
     redis = _rejester_config['registry_addresses'][0]
     def fin():
-        pexpect.run('rejester --registry-address {} delete {} --yes'
+        pexpect.run('rejester --registry-address {} --namespace {} delete --yes'
                     .format(redis, namespace_string),
                     logfile=sys.stdout, timeout=5)
     request.addfinalizer(fin)
@@ -44,8 +44,8 @@ def test_run(tmpdir, rejester_cli_namespace, _rejester_config):
     tmp_pid = str(tmpdir.join('pid'))
     tmp_log = str(tmpdir.join('log'))
     logger.info('pidfile=%r', tmp_pid)
-    pexpect.run('rejester --registry-address {} run_worker {} --pidfile {} '
-                '--logpath {}'
+    pexpect.run('rejester --registry-address {} --namespace {} run_worker '
+                '--pidfile {} --logpath {}'
                 .format(redis, namespace, tmp_pid, tmp_log),
                 logfile=sys.stdout,
                 timeout=5)

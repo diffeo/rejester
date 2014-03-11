@@ -213,7 +213,6 @@ class Manager(object):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', help='must be one of: load, delete, status, run')
-    parser.add_argument('namespace', help='data namespace in which to execute ACTION')
     parser.add_argument('--pidfile', default=None, help='PID lock file for use with action=run')
     parser.add_argument('-y', '--yes', default=False, action='store_true', dest='assume_yes',
                         help='Assume "yes" and require no input for confirmation questions.')

@@ -1,8 +1,7 @@
-'''Yakonfig declarations for rejester.
+''':mod:`yakonfig` declarations for rejester.
 
-This software is released under an MIT/X11 open source license.
-
-Copyright 2012-2014 Diffeo, Inc.
+.. This software is released under an MIT/X11 open source license.
+   Copyright 2012-2014 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 import yakonfig
@@ -14,8 +13,10 @@ default_config = {
 }
 
 def add_arguments(parser):
-    parser.add_argument('--app-name', metavar='NAME',
-                        help='application name prefix')
+    parser.add_argument('--app-name',
+                        help='name of app for namespace prefixing')
+    parser.add_argument('--namespace',
+                        help='namespace for prefixing table names')
     parser.add_argument('--registry-address', metavar='HOST:PORT',
                         action='append', dest='registry_addresses',
                         help='location of the Redis registry server')

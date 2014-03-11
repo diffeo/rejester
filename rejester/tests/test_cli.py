@@ -51,7 +51,7 @@ def test_cli(task_master, tmpdir):
     redis = task_master.registry.config['registry_addresses'][0]
     def r(action, params):
         return ('rejester --registry-address {} --app-name rejester_test '
-                '{} {} {}'.format(redis, action, namespace, params))
+                '--namespace {} {} {}'.format(redis, namespace, action, params))
     child = pexpect.spawn(r('load', '-u {} -w {}'.format(tmpf2, tmpf)),
                           logfile=sys.stdout)
     try:
