@@ -14,6 +14,7 @@ import psutil
 import random
 import Queue
 import multiprocessing
+import threading
 from signal import signal, SIGHUP, SIGTERM, SIGABRT
 from operator import itemgetter
 from collections import deque
@@ -66,6 +67,28 @@ class HeadlessWorker(Worker):
     '''
 
     def __init__(self, config, worker_id, work_spec_name, work_unit_key):
+        # Do a complete reset of logging right now before we do anything else.
+        #
+        # multiprocessing.Pool is super super asynchronous: when you
+        # apply_async() your job description goes into a queue, which
+        # a thread moves to another queue, a second thread tries every
+        # 0.1s to make sure the subprocesses exist, and the subprocess
+        # actually pulls the job off the queue.  If your main thread is
+        # doing something when that 0.1s timer fires, it's possible that
+        # the os.fork()ed child is actually forked holding some lock from
+        # the parent.
+        #
+        # See:  http://bugs.python.org/issue6721
+        #
+        # logging seems to be the most prominent thing that causes
+        # trouble here.  There is both a global logging._lock,
+        # plus every logging.Handler instance has a lock.  If we just
+        # clean up these locks we'll be good.
+        logging._lock = threading.RLock()
+        for handler in logging._handlers.itervalues():
+            handler.createLock()
+
+        # Now go on as normal
         super(HeadlessWorker, self).__init__(config)
         for sig_num in [SIGTERM, SIGHUP, SIGABRT]:
             signal(sig_num, self.terminate)
