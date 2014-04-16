@@ -437,7 +437,7 @@ class Registry(RedisBase):
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of dict_name
-            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")[1]
+            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)[1]
 
             if not next_key then
                 return {}
@@ -491,7 +491,7 @@ class Registry(RedisBase):
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of dict_name
-            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")[1]
+            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)[1]
 
             if not next_key then
                 return {}
@@ -534,7 +534,7 @@ class Registry(RedisBase):
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- find the next key and priority
-            local next_items = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES")
+            local next_items = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)
             local next_key = next_items[1]
             local next_priority = next_items[2]
             
