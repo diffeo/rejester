@@ -319,3 +319,51 @@ def test_run_worker_minimal(manager, tmpdir, global_config):
     finally:
         if pid is not None:
             os.kill(pid, signal.SIGKILL) # 'kill -9 pid'
+
+def test_run_worker_sigterm(tmpdir, global_config):
+    '''same as test_run_worker_minimal but shut down with a signal'''
+    # The *only* reliable feedback we can get here is via pidfile.
+    # Also, we *must* run this in a subprocess or we'll fail.
+    # And, finally, we can't just fork() because of logging concerns.
+    pidfile = str(tmpdir.join('pid'))
+    logfile = str(tmpdir.join('log'))
+    cfgfile = str(tmpdir.join('config.yaml'))
+    with open(cfgfile, 'w') as f:
+        f.write(yaml.dump(global_config))        
+    
+    rc = subprocess.call([sys.executable,
+                          '-m', 'rejester.run', '-c', cfgfile,
+                          'run_worker',
+                          '--pidfile', pidfile, '--logpath', logfile])
+    assert rc == 0
+
+    pid = None
+    for i in xrange(10):
+        if os.path.exists(pidfile):
+            with open(pidfile, 'r') as f:
+                pid = int(f.read())
+            break
+        time.sleep(0.1)
+    assert pid, "pid file never appeared"
+
+    # If this succeeds, the process exists
+    os.kill(pid, 0)
+
+    # Shut down with a signal
+    try:
+        os.kill(pid, signal.SIGTERM) # 'kill pid'
+        # This really seems like it should die nearly instantly, but
+        # in practice it seems to block on...something
+        for i in xrange(100):
+            try:
+                os.kill(pid, 0)
+            except OSError, e:
+                if e.errno == errno.ESRCH: # no such process
+                    pid = None
+                    break
+                raise
+            time.sleep(0.1)
+        assert pid is None, "worker failed to stop"
+    finally:
+        if pid is not None:
+            os.kill(pid, signal.SIGKILL) # 'kill -9 pid'
