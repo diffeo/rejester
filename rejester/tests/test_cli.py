@@ -5,130 +5,317 @@ This software is released under an MIT/X11 open source license.
 Copyright 2012-2014 Diffeo, Inc.
 '''
 from __future__ import absolute_import
+from cStringIO import StringIO
 import errno
 import logging
 import json
 import os
-import re
 import signal
+import subprocess
 import sys
 import time
 
-import pexpect
 import pytest
 import yaml
 
 import rejester
+from rejester.run import Manager
+from rejester._task_master import Worker
+from rejester.tests.fixtures import task_master, _rejester_config
+import yakonfig
 
 logger = logging.getLogger(__name__)
-pytest_plugins = 'rejester.tests.fixtures'
 
-## 1KB sized work_spec config
-work_spec = dict(
-    name = 'tbundle',
-    desc = 'a test work bundle',
-    min_gb = 8,
-    config = dict(many=' ', params=''),
-    module = 'rejester.workers',
-    run_function = 'test_work_program',
-    terminate_function = 'test_work_program',
-)
+@pytest.yield_fixture
+def global_config(_rejester_config):
+    with yakonfig.defaulted_config([rejester],
+                                   config={'rejester': _rejester_config}):
+        yield yakonfig.get_global_config()
 
-def test_cli(task_master, tmpdir):
+@pytest.fixture
+def manager(global_config, task_master):
+    mgr = Manager()
+    mgr._task_master = task_master
+    mgr.stdout = StringIO()
+    return mgr
+
+class TrivialWorker(Worker):
+    def run(self):
+        self.work_unit.run()
+
+@pytest.yield_fixture
+def worker(_rejester_config):
+    w = TrivialWorker(_rejester_config)
+    w.register()
+    yield w
+    w.unregister()
+
+@pytest.fixture
+def work_spec():
+    return dict(
+        name = 'tbundle',
+        desc = 'a test work bundle',
+        min_gb = 8,
+        config = dict(many=' ', params=''),
+        module = 'rejester.workers',
+        run_function = 'test_work_program',
+        terminate_function = 'test_work_program',
+    )
+
+@pytest.fixture
+def work_units(global_config):
+    num_units = 11
+    return { 'key-{}'.format(x): { 'sleep': 0.2, 'config': global_config }
+             for x in xrange(num_units) }
+
+@pytest.fixture
+def work_spec_path(work_spec, tmpdir):
     tmpf = str(tmpdir.join("work_spec.yaml"))
     with open(tmpf, 'w') as f:
         f.write(yaml.dump(work_spec))
-    assert yaml.load(open(tmpf, 'r')) == work_spec
+    return tmpf
 
-    num_units = 11
-    tmpf2 = str(tmpdir.join("work_units.yaml"))
-    with open(tmpf2, 'w') as f:
-        for x in xrange(num_units):
-            work_unit = json.dumps({'key-%d' % x: dict(sleep=0.2, config=task_master.registry.config)})
-            f.write(work_unit + '\n')
+@pytest.fixture
+def work_units_path(work_units, tmpdir):
+    tmpf = str(tmpdir.join('work_units.yaml'))
+    with open(tmpf, 'w') as f:
+        for k, v in work_units.iteritems():
+            f.write(json.dumps({k: v}) + '\n')
+    return tmpf
 
-    namespace = task_master.registry.config['namespace']
-    redis = task_master.registry.config['registry_addresses'][0]
-    def r(action, params):
-        return ('rejester --registry-address {} --app-name rejester_test '
-                '--namespace {} {} {}'.format(redis, namespace, action, params))
-    child = pexpect.spawn(r('load', '-u {} -w {}'.format(tmpf2, tmpf)),
-                          logfile=sys.stdout)
+@pytest.fixture
+def loaded(task_master, work_spec, work_units):
+    task_master.update_bundle(work_spec, work_units)
+
+def test_load_args(manager, work_spec_path, work_units_path):
+    '''various tests for invalid arguments to "load"'''
+    with pytest.raises(SystemExit):
+        manager.runcmd('load', [])
+    with pytest.raises(SystemExit):
+        manager.runcmd('load', ['-w', work_spec_path])
+    with pytest.raises(SystemExit):
+        manager.runcmd('load', ['-u', work_units_path])
+    with pytest.raises(SystemExit):
+        manager.runcmd('load', ['-w', os.path.basename(work_spec_path),
+                                '-u', work_units_path])
+    with pytest.raises(SystemExit):
+        manager.runcmd('load', ['-w', work_spec_path,
+                                '-u', os.path.basename(work_units_path)])
+
+def test_load(manager, work_spec_path, work_units_path, work_spec, work_units):
+    manager.runcmd('load', ['-w', work_spec_path, '-u', work_units_path])
+
+    tm = manager.task_master
+    spec = tm.get_work_spec(work_spec['name'])
+    assert spec['desc'] == work_spec['desc']
+    units = tm.list_work_units(work_spec['name'])
+    assert len(units) == len(work_units)
+    assert sorted(units.keys()) == sorted(work_units.keys())
+
+def test_delete(manager, loaded, work_spec, namespace_string):
+    spec = manager.task_master.get_work_spec(work_spec['name'])
+    assert spec['desc'] == work_spec['desc']
+
+    manager.runcmd('delete', ['-y'])
+    assert (manager.stdout.getvalue() ==
+            'deleting namespace \'' + namespace_string + '\'\n')
+
+    spec = manager.task_master.get_work_spec(work_spec['name'])
+    assert spec is None
+
+def test_work_spec_bad(manager, loaded, tmpdir):
+    with pytest.raises(SystemExit):
+        manager.runcmd('work_spec', [])
+    with pytest.raises(SystemExit):
+        manager.runcmd('work_spec', ['-w', str(tmpdir.join('missing'))])
+
+def test_work_spec_by_name(manager, loaded, work_spec):
+    manager.runcmd('work_spec', ['-W', work_spec['name']])
+    spec = json.loads(manager.stdout.getvalue())
+    assert spec == work_spec
+
+def test_work_spec_by_file(manager, loaded, work_spec, work_spec_path):
+    manager.runcmd('work_spec', ['-w', work_spec_path])
+    spec = json.loads(manager.stdout.getvalue())
+    assert spec == work_spec
+
+def test_status_bad(manager, loaded, tmpdir):
+    with pytest.raises(SystemExit):
+        manager.runcmd('status', [])
+    with pytest.raises(SystemExit):
+        manager.runcmd('status', ['-w', str(tmpdir.join('missing'))])
+
+def test_status_by_name(manager, loaded, work_spec, work_units):
+    manager.runcmd('status', ['-W', work_spec['name']])
+    status = json.loads(manager.stdout.getvalue())
+    ref = {
+        'num_available': len(work_units),
+        'num_blocked': 0,
+        'num_failed': 0,
+        'num_finished': 0,
+        'num_pending': 0,
+        'num_tasks': len(work_units),
+    }
+    assert status == ref
+
+def test_status_by_file(manager, loaded, work_spec_path, work_units):
+    manager.runcmd('status', ['-w', work_spec_path])
+    status = json.loads(manager.stdout.getvalue())
+    ref = {
+        'num_available': len(work_units),
+        'num_blocked': 0,
+        'num_failed': 0,
+        'num_finished': 0,
+        'num_pending': 0,
+        'num_tasks': len(work_units),
+    }
+    assert status == ref
+
+def test_status_not_loaded(manager, work_spec):
+    manager.runcmd('status', ['-W', work_spec['name']])
+    status = json.loads(manager.stdout.getvalue())
+    ref = {
+        'num_available': 0,
+        'num_blocked': 0,
+        'num_failed': 0,
+        'num_finished': 0,
+        'num_pending': 0,
+        'num_tasks': 0,
+    }
+    assert status == ref
+
+def test_status_with_work(manager, loaded, work_spec, work_units, worker):
+    for n in xrange(3):
+        unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
+        unit.finish()
+    for n in xrange(2):
+        unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
+        unit.fail()
+    unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
+    
+    manager.runcmd('status', ['-W', work_spec['name']])
+    status = json.loads(manager.stdout.getvalue())
+    ref = {
+        'num_available': len(work_units)-6,
+        'num_blocked': 0,
+        'num_failed': 2,
+        'num_finished': 3,
+        'num_pending': 1,
+        'num_tasks': len(work_units),
+    }
+    assert status == ref
+
+def test_work_units_names(manager, loaded, work_spec, work_units):
+    manager.runcmd('work_units', ['-W', work_spec['name']])
+    response = manager.stdout.getvalue()
+    names = response.strip().split('\n')
+    assert sorted(names) == sorted(work_units.keys())
+
+def test_work_units_details(manager, loaded, work_spec, work_units):
+    manager.runcmd('work_units', ['-W', work_spec['name'], '--details'])
+    response = manager.stdout.getvalue()
+    found = set()
+    for line in response.strip().split('\n'):
+        k,v = line.split(': ', 1)
+        assert k.startswith("u'")
+        assert k.endswith("'")
+        key = k[2:-1]
+        assert key in work_units
+        # We should check the right-hand side of this too, but there
+        # is some ickiness around Unicode round-tripping
+        found.add(key)
+    assert sorted(found) == sorted(work_units.keys())
+
+def test_failed_trivial(manager, loaded, work_spec):
+    manager.runcmd('failed', ['-W', work_spec['name']])
+    assert manager.stdout.getvalue() == ''
+
+def test_failed_one(manager, worker, loaded, work_spec):
+    unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
+    assert unit.work_spec_name == work_spec['name']
+    unit.fail()
+
+    manager.runcmd('failed', ['-W', work_spec['name']])
+    assert manager.stdout.getvalue() == unit.key + '\n'
+    
+def test_failed_one_details(manager, worker, loaded, work_spec):
+    unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
+    assert unit.work_spec_name == work_spec['name']
+    unit.fail()
+
+    manager.runcmd('failed', ['-W', work_spec['name'], '--details'])
+    assert manager.stdout.getvalue().startswith("u'" + unit.key + "': {")
+
+def test_mode(manager):
+    def mode(args, response):
+        manager.runcmd('mode', args)
+        assert manager.stdout.getvalue() == response + '\n'
+        manager.stdout.truncate(0)
+
+    mode([], "IDLE")
+    mode(['run'], "set mode to 'run'")
+    mode([], "RUN")
+    mode(['terminate'], "set mode to 'terminate'")
+    mode([], "TERMINATE")
+    mode(['idle'], "set mode to 'idle'")
+    mode([], "IDLE")
+    
+    with pytest.raises(SystemExit):
+        manager.runcmd('mode', ['other'])
+
+def test_run_worker_args(manager, tmpdir):
+    with pytest.raises(SystemExit):
+        manager.runcmd('run_worker', ['--pidfile', 'foo']) # not absolute
+    with pytest.raises(SystemExit):
+        manager.runcmd('run_worker', ['--logpath', 'foo'])
+    with pytest.raises(SystemExit):
+        manager.runcmd('run_worker', ['--pidfile', # missing dir
+                                      str(tmpdir.join('missing', 'pidfile'))])
+    with pytest.raises(SystemExit):
+        manager.runcmd('run_worker', ['--logpath', # missing dir
+                                      str(tmpdir.join('missing', 'logpath'))])
+
+def test_run_worker_minimal(manager, tmpdir, global_config):
+    # The *only* reliable feedback we can get here is via pidfile.
+    # Also, we *must* run this in a subprocess or we'll fail.
+    # And, finally, we can't just fork() because of logging concerns.
+    pidfile = str(tmpdir.join('pid'))
+    logfile = str(tmpdir.join('log'))
+    cfgfile = str(tmpdir.join('config.yaml'))
+    with open(cfgfile, 'w') as f:
+        f.write(yaml.dump(global_config))        
+    
+    rc = subprocess.call([sys.executable,
+                          '-m', 'rejester.run', '-c', cfgfile,
+                          'run_worker',
+                          '--pidfile', pidfile, '--logpath', logfile])
+    assert rc == 0
+
+    pid = None
+    for i in xrange(10):
+        if os.path.exists(pidfile):
+            with open(pidfile, 'r') as f:
+                pid = int(f.read())
+            break
+        time.sleep(0.1)
+    assert pid, "pid file never appeared"
+
+    # If this succeeds, the process exists
+    os.kill(pid, 0)
+
+    # Attempt a clean shutdown
     try:
-        child.expect('loading', timeout=5)
-        child.expect('pushing', timeout=5)
-        child.expect('finish', timeout=5)
-    finally:
-        child.close()
-
-    logger.debug(json.dumps(task_master.status(work_spec['name']), indent=4))
-
-    out = pexpect.run(r('status', '-w {}'.format(tmpf)),
-                      timeout=5, logfile=sys.stdout)
-    assert re.search('num_available.*{0}'.format(num_units), out)
-
-    out = pexpect.run(r('work_units', '-w {}'.format(tmpf)),
-                      timeout=5, logfile=sys.stdout)
-    assert out == ''.join(sorted(['key-{}\r\n'.format(n)
-                                  for n in xrange(num_units)]))
-
-    tmp_pid = str(tmpdir.join('pid'))
-    tmp_log = str(tmpdir.join('log'))
-    out = pexpect.run(r('run_worker',
-                        '--logpath {} --pidfile {}'.format(tmp_log, tmp_pid)),
-                      timeout=5, logfile=sys.stdout)
-    assert os.path.exists(tmp_pid)
-    pid = int(open(tmp_pid).read())
-    try:
-        os.kill(pid, 0) # will raise OSError if pid is dead
-
-        out = pexpect.run(r('set_RUN', ''),
-                          timeout=5, logfile=sys.stdout) 
-        assert out.find('set') != -1
-
-        start_time = time.time()
-        end_time = start_time + 60
-        while time.time() < end_time:
-            if task_master.num_finished(work_spec['name']) == num_units:
-                break
-            if os.path.exists(tmp_log):
-                with open(tmp_log, 'r') as f:
-                    print f.read()
-            logger.info('{:.1f} elapsed seconds, {} finished'
-                        .format(time.time() - start_time,
-                                task_master.num_finished(work_spec['name'])))
-            logger.debug(json.dumps(task_master.status(work_spec['name'])))
-            time.sleep(1)
-
-        assert task_master.num_finished(work_spec['name']) == num_units
-        logger.info('tasks completed')
-    finally:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError, exc:
-            pass # assume errno == -ESRCH; we'll do more below
-        start_time = time.time()
-        end_time = start_time + 20
-        while time.time() < end_time:
+        manager.runcmd('mode', ['terminate'])
+        for i in xrange(60): # checks every 1-5 seconds
             try:
                 os.kill(pid, 0)
-            except OSError, exc:
-                # If we get a "no such process" error then the process is dead
-                # (which is what we want)
-                assert exc.errno == errno.ESRCH
-                break
-            logger.debug('{:.1f} elapsed seconds, {} still alive'
-                         .format(time.time() - start_time, pid))
-            time.sleep(0.2)  # wait a moment for daemon child to exit
-        # Double-check the process is dead
-        try:
-            os.kill(pid, 0)
-            # if we did not get an exception then the process is alive
-            logger.warn('worker pid {0} did not respond to SIGTERM, killing'
-                        .format(pid))
-            os.kill(pid, signal.SIGKILL)
-            assert False, "workers did not shut down"
-        except OSError, exc:
-            assert exc.errno == errno.ESRCH
-            pass
-        logger.info('worker exited')
+            except OSError, e:
+                if e.errno == errno.ESRCH: # no such process
+                    pid = None
+                    break
+                raise
+            time.sleep(0.1)
+        assert pid is None, "worker failed to stop"
+    finally:
+        if pid is not None:
+            os.kill(pid, signal.SIGKILL) # 'kill -9 pid'
