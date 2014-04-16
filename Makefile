@@ -3,7 +3,7 @@
 
 clean: 
 	python setup.py clean --all
-	rm -rf build dist src/rejester.egg-info runtests.py
+	rm -rf build dist rejester.egg-info runtests.py
 
 test: install
 	python setup.py install_test
