@@ -14,6 +14,12 @@ queue.
 
 .. _Redis: http://redis.io/
 
+:command:`rejester` tool
+========================
+
+.. automodule:: rejester.run
+.. currentmodule:: rejester
+
 Task system
 ===========
 
