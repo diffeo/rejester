@@ -87,25 +87,13 @@ def namespace_string2(request):
     return make_namespace_string(request.node.name + '2')
 
 @pytest.fixture(scope='function')
-def _rejester_config(request):
-    """Basic Rejester configuration.
-
-    If the test system was started with a --redis-address command-line
-    parameter, generate the configuration from that.  If the test
-    directory contains a file ``config_registry.yaml``, the
-    configuration is loaded from there.  Otherwise this returns an
-    empty dictionary.
-
-    """
-    redis = request.config.getoption('--redis-address')
-    if redis is not None:
-        return { 'registry_addresses': [ redis ] }
-    config_path = request.fspath.new(basename='config_registry.yaml')
-    try:
-        with config_path.open('r') as f:
-            return yaml.load(f)
-    except OSError, exc:
-        return {}
+def _rejester_config(redis_address, namespace_string):
+    """Basic Rejester configuration."""
+    return {
+        'app_name': 'rejester',
+        'registry_addresses': [ redis_address ],
+        'namespace': namespace_string,
+    }
 
 @pytest.fixture(scope='function')
 def registry(request, _rejester_config, namespace_string):

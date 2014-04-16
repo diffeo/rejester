@@ -457,6 +457,11 @@ class TaskMaster(object):
             )
 
 
+    def get_work_spec(self, work_spec_name):
+        '''Get the dictionary defining some work spec.'''
+        with self.registry.lock(atime=1000) as session:
+            return session.get(WORK_SPECS, work_spec_name)
+
     def list_work_units(self, work_spec_name):
         """Get a dictionary of work units for some work spec.
 
@@ -467,6 +472,16 @@ class TaskMaster(object):
         """
         with self.registry.lock(atime=1000) as session:
             return session.pull(WORK_UNITS_ + work_spec_name)
+
+    def list_failed_work_units(self, work_spec_name):
+        """Get a dictionary of failed work units for some work spec.
+
+        The dictionary is from work unit name to work unit definiton.
+        Only work units that have completed unsuccessfully are included.
+
+        """
+        with self.registry.lock(atime=1000) as session:
+            return session.pull(WORK_UNITS_ + work_spec_name + _FAILED)
 
     def inspect_work_unit(self, work_spec_name, work_unit_key):
         '''Get the data for some work unit.

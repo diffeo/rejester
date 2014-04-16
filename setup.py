@@ -108,7 +108,7 @@ setup(
     ],
     install_requires=[
         'dblogger',
-        'yakonfig >= 0.4.0',
+        'yakonfig >= 0.5.0',
         'gevent',
         'pyyaml',
         'redis',
