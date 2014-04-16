@@ -116,6 +116,11 @@ interactive shell instead.
   will start running jobs again.  In "terminate" mode, workers will
   stop execution as soon as they finish their running jobs.
 
+``workers``
+  List all of the known workers.  With ``--all`` include workers that
+  haven't checked in recently.  With ``--details`` include all known
+  details.
+
 ``run_worker [--pidfile /path/to/file.pid] [--logpath /path/to/file.log]``
   Start a worker as a background task.  This should generally not be
   run from the interactive shell.  If ``--pidfile`` is specified, the
@@ -324,6 +329,21 @@ class Manager(ArgParseCmd):
         else:
             mode = self.task_master.get_mode()
             self.stdout.write('{!s}\n'.format(mode))
+
+    def args_workers(self, parser):
+        parser.add_argument('--all', action='store_true',
+                            help='list all workers (even dead ones)')
+        parser.add_argument('--details', action='store_true',
+                            help='include more details if available')
+    def do_workers(self, args):
+        '''list all known workers'''
+        workers = self.task_master.workers(alive=not args.all)
+        for k in sorted(workers.iterkeys()):
+            self.stdout.write('{} ({})\n'.format(k, workers[k]))
+            if args.details:
+                heartbeat = self.task_master.get_heartbeat(k)
+                for hk, hv in heartbeat.iteritems():
+                    self.stdout.write('  {}: {}\n'.format(hk, hv))
 
     def args_run_worker(self, parser):
         parser.add_argument('--pidfile', metavar='FILE', type=absolute_path,

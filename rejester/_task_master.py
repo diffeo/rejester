@@ -46,8 +46,13 @@ class Worker(object):
         self.lifetime = 300 ## five minutes
 
     def environment(self):
-        '''
-        raw data about worker to support forensics on failed tasks
+        '''Get raw data about this worker.
+
+        This is recorded in the :meth:`heartbeat` info, and can be
+        retrieved by :meth:`TaskMaster.get_heartbeat`.  The dictionary
+        includes keys ``worker_id``, ``host``, ``fqdn``, ``version``,
+        ``working_set``, and ``memory``.
+
         '''
         env = dict(
             worker_id = self.worker_id,
@@ -62,7 +67,12 @@ class Worker(object):
         return env
 
     def register(self):
-        '''record the availability of this worker and get a unique identifer
+        '''Record the availability of this worker and get a unique identifer.
+
+        This sets :attr:`worker_id` and calls :meth:`heartbeat`.  This
+        cannot be called multiple times without calling
+        :meth:`unregister` in between.
+
         '''
         if self.worker_id:
             raise ProgrammerError('Worker.register cannot be called again without first calling unregister; it is not idempotent')
@@ -71,7 +81,10 @@ class Worker(object):
         return self.worker_id
 
     def unregister(self):
-        '''remove this worker from the list of available workers
+        '''Remove this worker from the list of available workers.
+
+        This requires the worker to already have been :meth:`register()`.
+
         ''' 
         with self.task_master.registry.lock() as session:
             session.delete(WORKER_STATE_ + self.worker_id)
@@ -384,7 +397,22 @@ class TaskMaster(object):
         with self.registry.lock() as session:
             return session.filter(
                 WORKER_OBSERVED_MODE, 
-                priority_min=alive and time.time() or None)
+                priority_min=alive and time.time() or '-inf')
+
+    def get_heartbeat(self, worker_id):
+        '''Get the last known state of some worker.
+
+        If the worker never existed, or the worker's lifetime has
+        passed without it heartbeating, this will return an empty
+        dictionary.
+
+        :param str worker_id: worker ID
+        :return: dictionary of worker state, or empty dictionary
+        :see: :meth:`Worker.heartbeat`
+
+        '''
+        with self.registry.lock() as session:
+            return session.pull(WORKER_STATE_ + worker_id)
 
     def dump(self):
         '''Print the entire contents of this to debug log messages.

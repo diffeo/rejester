@@ -263,6 +263,26 @@ def test_mode(manager):
     with pytest.raises(SystemExit):
         manager.runcmd('mode', ['other'])
 
+def test_workers_trivial(manager):
+    manager.runcmd('workers', [])
+    assert manager.stdout.getvalue() == ''
+
+def test_workers_one(manager, worker):
+    manager.runcmd('workers', [])
+    assert manager.stdout.getvalue() == worker.worker_id + ' (IDLE)\n'
+
+def test_workers_one_all(manager, worker):
+    manager.runcmd('workers', ['--all']) # not very interesting
+    assert manager.stdout.getvalue() == worker.worker_id + ' (IDLE)\n'
+
+def test_workers_one_details(manager, worker):
+    manager.runcmd('workers', ['--details'])
+    lines = manager.stdout.getvalue().strip().split('\n')
+    assert lines[0] == worker.worker_id + ' (IDLE)'
+    assert len(lines) > 1
+    for l in lines[1:]:
+        assert l.startswith('  ')
+
 def test_run_worker_args(manager, tmpdir):
     with pytest.raises(SystemExit):
         manager.runcmd('run_worker', ['--pidfile', 'foo']) # not absolute
