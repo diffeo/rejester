@@ -54,9 +54,12 @@ class Worker(object):
         ``working_set``, and ``memory``.
 
         '''
+        hostname, aliases, ipaddrs = socket.gethostbyaddr(socket.gethostname())
         env = dict(
             worker_id = self.worker_id,
-            host = socket.gethostbyaddr(socket.gethostname()),
+            hostname = hostname,
+            aliases = tuple(aliases),
+            ipaddrs = tuple(ipaddrs),
             fqdn = socket.getfqdn(),
             version = pkg_resources.get_distribution("rejester").version, # pylint: disable=E1103
             working_set = [(dist.key, dist.version) for dist in pkg_resources.WorkingSet()], # pylint: disable=E1103
