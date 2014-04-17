@@ -137,6 +137,7 @@ import argparse
 import json
 import lockfile
 import logging
+import logging.config
 import os
 import sys
 import traceback
@@ -144,7 +145,7 @@ import traceback
 import daemon
 import yaml
 
-from dblogger import configure_logging, FixedWidthFormatter
+import dblogger
 import rejester
 from rejester._task_master import TaskMaster
 from rejester.workers import run_worker, MultiWorker
@@ -355,6 +356,21 @@ class Manager(ArgParseCmd):
         pidfile = args.pidfile
         logpath = args.logpath
 
+        # Shut off all logging...it can cause problems
+        logging.config.dictConfig({
+            'version': 1,
+        })
+        gconfig = yakonfig.get_global_config()
+        yakonfig.clear_global_config()
+        # Don't try to log to the console or debug if set
+        if 'logging' in gconfig:
+            if 'root' in gconfig['logging']:
+                if 'handlers' in gconfig['logging']['root']:
+                    handlers = gconfig['logging']['root']['handlers']
+                    for handler in 'console', 'debug':
+                        if handler in handlers:
+                            handlers.remove(handler)
+
         if pidfile:
             pidfile_lock = lockfile.FileLock(pidfile)
         else:
@@ -364,11 +380,10 @@ class Manager(ArgParseCmd):
             try:
                 if pidfile:
                     open(pidfile,'w').write(str(os.getpid()))
-                # Holding loggers open across DaemonContext is a big
-                # problem; establish them for the first time here
-                configure_logging(yakonfig.get_global_config())
+                # Reestablish loggers
+                yakonfig.set_default_config([dblogger], config=gconfig)
                 if logpath:
-                    formatter = FixedWidthFormatter()
+                    formatter = dblogger.FixedWidthFormatter()
                     # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
                     handler = logging.handlers.RotatingFileHandler(
                         logpath, maxBytes=10000000, backupCount=3)
@@ -388,12 +403,7 @@ def main():
         description='manage the rejester distributed work system')
     mgr = Manager()
     mgr.add_arguments(parser)
-    args = yakonfig.parse_args(parser, [yakonfig, rejester])
-
-    # run_worker is Very Special; anything else needs to set up logging now
-    if getattr(args, 'action', None) != 'run_worker':
-        configure_logging(yakonfig.get_global_config())
-
+    args = yakonfig.parse_args(parser, [yakonfig, dblogger, rejester])
     mgr.main(args)
 
 if __name__ == '__main__':

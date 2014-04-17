@@ -107,7 +107,7 @@ setup(
         'License :: OSI Approved :: MIT License',  ## MIT/X11 license http://opensource.org/licenses/MIT
     ],
     install_requires=[
-        'dblogger',
+        'dblogger >= 0.4.0',
         'yakonfig >= 0.5.0',
         'gevent',
         'pyyaml',
