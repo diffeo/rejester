@@ -32,21 +32,14 @@ principal way to start a worker process to run jobs.  Typical use is:
 
 .. program:: rejester
 
-.. option:: --config <file>, -c <file>
-
-Provide a :mod:`yakonfig` configuration file.  The location of the
-:mod:`rejester` registry server and other details will be taken from
-its ``rejester`` section.
-
-.. option:: --dump-config {default,effective,full}
-
-Print the YAML configuration to standard output, then stop without
-doing any further work.  If the argument is "default" then print the
-default configuration, ignoring all command-line options.  If the
-argument is "full" then print the complete configuration, including
-all command-line options and default values.  If the argument is
-"effective" then print the complete configuration, but only as it
-differs from the default.
+The :program:`rejester` tool supports the standard
+:option:`--config <yakonfig --config>`,
+:option:`--dump-config <yakonfig --dump-config>`,
+:option:`--verbose <dblogger --verbose>`,
+:option:`--quiet <dblogger --quiet>`, and
+:option:`--debug <dblogger --debug>` options.  This, and any other tool
+that integrates with :mod:`rejester`, supports the following additional
+options:
 
 .. option:: --app-name <name>
 
@@ -63,73 +56,80 @@ namespace in a single application.
 
 Provide the location of a Redis server.
 
-.. option:: <command> [args...]
+If no further options are given, start an interactive shell to monitor
+and control :mod:`rejester`.  Alternatively, a single command can be
+given on the command line.  The tool provides the following commands:
 
-Run some specific command.  If no command is specified, start an
-interactive shell instead.
+.. describe:: load --work-spec file.yaml --work-units file2.json
 
-:command:`rejester` commands
-----------------------------
+    Loads a set of work units.  The work spec (``-w``) and work units
+    (``-u``) must both be provided as external files.  The work spec
+    file is the YAML serialization of a work spec definition; see
+    :class:`rejester.TaskMaster` for details of what this looks like.
+    The work unit file is a series of JSON records, one to a line,
+    each of which is a dictionary of a single ``{"key": {"unit":
+    "definition", "dictionary": "values"}}``.
 
-``load --work-spec file.yaml --work-units file2.json``
-  Loads a set of work units.  The work spec (``-w``) and work units
-  (``-u``) must both be provided as external files.  The work spec
-  file is the YAML serialization of a work spec definition; see
-  :class:`rejester.TaskMaster` for details of what this looks like.
-  The work unit file is a series of JSON records, one to a line, each
-  of which is a dictionary of a single ``{"key": {"unit":
-  "definition", "dictionary": "values"}}``.
+.. describe:: delete
 
-``delete``
-  Deletes the entire namespace.  Prompts for confirmation, unless
-  ``-y`` or ``--yes`` is given as an argument.
+    Deletes the entire namespace.  Prompts for confirmation, unless
+    ``-y`` or ``--yes`` is given as an argument.
 
-``work_spec --work-spec-name name``
-  Prints out the definition of a work spec, assuming it has already
-  been loaded.  The work spec name may be given with a
-  ``--work-spec-name`` or ``-W`` option; or, a ``--work-spec`` or
-  ``-w`` option may name a work spec file compatible with the ``load``
-  command.
+.. describe:: work_spec --work-spec-name name
 
-``status --work-spec-name name``
-  Prints out a summary of the jobs in some work spec.  Provide the
-  work spec name the same way as for the ``work_spec`` command.
+    Prints out the definition of a work spec, assuming it has already
+    been loaded.  The work spec name may be given with a
+    ``--work-spec-name`` or ``-W`` option; or, a ``--work-spec`` or
+    ``-w`` option may name a work spec file compatible with the
+    ``load`` command.
 
-``work_units --work-spec-name name``
-  Prints out a listing of the work units that have not yet completed
-  for some work spec.  Provide the work spec name the same way as for
-  the ``work_spec`` command.  This includes the work units that the
-  ``status`` command would report as "available" or "pending", but
-  not other statuses.  If ``--details`` is given as an argument,
-  print the definition of the work unit along with its name.
+.. describe:: status --work-spec-name name
 
-``failed --work-spec-name name``
-  The same as ``work_units``, but only prints out "failed" work
-  units.  ``failed -W name --details`` should include a traceback
-  indicating why the work unit failed.
+    Prints out a summary of the jobs in some work spec.  Provide the
+    work spec name the same way as for the ``work_spec`` command.
 
-``mode [idle|run|terminate]``
-  With no arguments, print out the current rejester mode; otherwise
-  set it.  In "run" mode, workers will start new jobs as they become
-  available.  In "idle" mode, workers will not start new jobs but also
-  will continue to execute; if the mode is switched back to "run" they
-  will start running jobs again.  In "terminate" mode, workers will
-  stop execution as soon as they finish their running jobs.
+.. describe:: work_units --work-spec-name name
 
-``workers``
-  List all of the known workers.  With ``--all`` include workers that
-  haven't checked in recently.  With ``--details`` include all known
-  details.
+    Prints out a listing of the work units that have not yet completed
+    for some work spec.  Provide the work spec name the same way as
+    for the ``work_spec`` command.  This includes the work units that
+    the ``status`` command would report as "available" or "pending",
+    but not other statuses.  If ``--details`` is given as an argument,
+    print the definition of the work unit along with its name.
 
-``run_worker [--pidfile /path/to/file.pid] [--logpath /path/to/file.log]``
-  Start a worker as a background task.  This should generally not be
-  run from the interactive shell.  If ``--pidfile`` is specified, the
-  process ID of the worker is written to the named file, which must be
-  an absolute path.  If ``--logpath`` is specified, log messages from
-  the worker will be written to the specified file, which again must be
-  an absolute path; this is in addition to any logging specified in the
-  configuration file.  The worker may be shut down by globally switching
-  to ``mode terminate``, or by ``kill $(cat /path/to/file.pid)``.
+.. describe:: failed --work-spec-name name
+
+    The same as ``work_units``, but only prints out "failed" work
+    units.  ``failed -W name --details`` should include a traceback
+    indicating why the work unit failed.
+
+.. describe:: mode [idle|run|terminate]
+
+    With no arguments, print out the current rejester mode; otherwise
+    set it.  In "run" mode, workers will start new jobs as they become
+    available.  In "idle" mode, workers will not start new jobs but
+    also will continue to execute; if the mode is switched back to
+    "run" they will start running jobs again.  In "terminate" mode,
+    workers will stop execution as soon as they finish their running
+    jobs.
+
+.. describe:: workers
+
+    List all of the known workers.  With ``--all`` include workers
+    that haven't checked in recently.  With ``--details`` include all
+    known details.
+
+.. describe:: run_worker [--pidfile /path/to/file.pid] [--logpath /path/to/file.log]
+
+    Start a worker as a background task.  This should generally not be
+    run from the interactive shell.  If ``--pidfile`` is specified,
+    the process ID of the worker is written to the named file, which
+    must be an absolute path.  If ``--logpath`` is specified, log
+    messages from the worker will be written to the specified file,
+    which again must be an absolute path; this is in addition to any
+    logging specified in the configuration file.  The worker may be
+    shut down by globally switching to ``mode terminate``, or by
+    ``kill $(cat /path/to/file.pid)``.
 
 '''
 from __future__ import absolute_import
