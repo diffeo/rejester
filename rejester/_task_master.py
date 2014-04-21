@@ -18,7 +18,7 @@ from operator import itemgetter
 
 from rejester._registry import Registry
 from rejester.exceptions import ProgrammerError, LockError, \
-    LostLease, EnvironmentError, NoSuchWorkSpecError
+    LostLease, EnvironmentError, NoSuchWorkSpecError, NoSuchWorkUnitError
 
 logger = logging.getLogger(__name__)
 
@@ -710,6 +710,40 @@ class TaskMaster(object):
                         later_unit, depends)
 
             return True
+
+    def retry(self, work_spec_name, work_unit_name):
+        '''Move a failed work unit back into the "pending" queue.
+
+        The work unit will be available to execute immediately.  If
+        other tasks had depended on it, those dependencies will not
+        be recreated.
+
+        :param str work_spec_name: name of the (existing) work spec
+        :param str work_unit_name: name of the (failed) work unit
+        :raise rejester.NoSuchWorkSpecError: if `work_spec_name` is
+          invalid
+        :raise rejester.NoSuchWorkUnitError: if `work_spec_name` is
+          valid but `work_unit_name` is not a failed work unit
+        :raise rejester.LockError: if the registry lock could not be
+          obtained
+        
+        '''
+        with self.registry.lock(atime=1000) as session:
+            # This sequence is safe even if this system dies
+            unit = session.get(WORK_UNITS_ + work_spec_name + _FAILED,
+                               work_unit_name)
+            if unit is None:
+                spec = session.get(WORK_SPECS, work_spec_name)
+                if spec is None:
+                    raise NoSuchWorkSpecError(work_spec_name)
+                else:
+                    raise NoSuchWorkUnitError(work_unit_name)
+            if 'traceback' in unit:
+                del unit['traceback']
+            session.move(WORK_UNITS_ + work_spec_name + _FAILED,
+                         WORK_UNITS_ + work_spec_name,
+                         { work_unit_name: unit },
+                         priority=0)
 
     def nice(self, work_spec_name, nice):        
         with self.registry.lock(atime=1000) as session:

@@ -15,7 +15,7 @@ import pytest
 
 from rejester import TaskMaster
 from rejester._task_master import WORK_UNITS_, _FINISHED
-from rejester.exceptions import LostLease
+from rejester.exceptions import LostLease, NoSuchWorkUnitError
 
 logger = logging.getLogger(__name__)
 pytest_plugins = 'rejester.tests.fixtures'
@@ -113,6 +113,47 @@ def test_task_master_reset_all(task_master):
     with task_master.registry.lock() as session:
         assert session.popitem(WORK_UNITS_ + work_spec['name'], priority_max=-1) is None
 
+def test_task_master_retry(task_master):
+    work_units = dict(foo={}, bar={})
+    task_master.update_bundle(work_spec, work_units)
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_pending(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == 2
+
+    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
+    wuname = work_unit.key
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == 1
+    assert task_master.num_pending(work_spec['name']) == 1
+
+    work_unit.fail(exc=Exception())
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_pending(work_spec['name']) == 0
+    assert task_master.num_failed(work_spec['name']) == 1
+    assert task_master.num_available(work_spec['name']) == 1
+
+    task_master.retry(work_spec['name'], wuname)
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_pending(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == 2
+
+    with pytest.raises(NoSuchWorkUnitError):
+        task_master.retry(work_spec['name'], wuname)
+
+    assert (sorted(task_master.list_work_units(work_spec['name'])) ==
+            ['bar', 'foo'])
+
+    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
+    assert 'traceback' not in work_unit.data
+    work_unit.finish()
+    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
+    assert 'traceback' not in work_unit.data
+    work_unit.finish()
+    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
+    assert work_unit is None
 
 def test_task_master_lost_lease(task_master):
     '''test that waiting too long to renew a lease allows another worker

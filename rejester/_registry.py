@@ -577,33 +577,27 @@ class Registry(RedisBase):
         logger.debug('Registry.popitem_move(%r, %r) --> %r', from_dict, to_dict, key_value)
         return self._decode(key_value[0]), self._decode(key_value[1])
 
-    def move(self, from_dict, to_dict, mapping):
-        '''Pop mapping's keys out of from_dict, and update them in to_dict
-        with the new values provided by mapping
-        '''
-        if self._lock_name is None:
-            raise ProgrammerError('must acquire lock first')
-        script = '''
-        if redis.call("get", KEYS[1]) == ARGV[1]
-        then
-            local count = 0
-            for i = 2, #ARGV, 2  do
-                -- remove next item of from_dict
-                local next_priority = redis.call("zscore", KEYS[2] .. "keys", ARGV[i])
-                redis.call("zrem", KEYS[2] .. "keys", ARGV[i])
-                -- drop the old value: local next_val = redis.call("hget", KEYS[2], ARGV[i])
-                -- zrem removed it from Sorted Set, so also remove from hash
-                redis.call("hdel", KEYS[2], ARGV[i])
-                -- put it in to_dict
-                redis.call("hset",  KEYS[3], ARGV[i], ARGV[i+1])
-                redis.call("zadd", KEYS[3] .. "keys", next_priority, ARGV[i])
-                count = count + 1
-            end
-            return count
-        else
-            -- ERROR: No longer own the lock
-            return 0
-        end
+    def move(self, from_dict, to_dict, mapping, priority=None):
+        '''Move keys between dictionaries, possibly with changes.
+
+        Every key in `mapping` is removed from `from_dict`, and added to
+        `to_dict` with its corresponding value.  The priority will be
+        `priority`, if specified, or else its current priority.
+
+        This operation on its own is atomic and does not require a
+        session lock; however, it does require you to pass in the
+        values, which probably came from a previous query call.  If
+        you do not call this with a session lock but some other caller
+        has one, you will get :class:`rejester.LockError`.  If you do
+        have a session lock, this will check that you still have it.
+
+        :param str from_dict: name of original dictionary
+        :param str to_dict: name of target dictionary
+        :param dict mapping: keys to move with new values
+        :param int priority: target priority, or :const:`None` to use existing
+        :raise rejester.LockError: if the session lock timed out
+        :raise rejester.EnvironmentError: if some items didn't move
+
         '''
         items = []
         ## This flattens the dictionary into a list
@@ -614,12 +608,45 @@ class Registry(RedisBase):
             items.append(value)
 
         conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
+        local lock_holder = redis.call("get", KEYS[1])
+        if (not lock_holder) or (lock_holder == ARGV[1])
+        then
+            local count = 0
+            for i = 3, #ARGV, 2  do
+                -- find the priority of the item
+                local next_priority = ARGV[2]
+                if next_priority == "" then
+                    next_priority = redis.call("zscore", KEYS[3], ARGV[i])
+                end
+                -- remove item from the sorted set and the real data
+                redis.call("hdel", KEYS[2], ARGV[i])
+                redis.call("zrem", KEYS[3], ARGV[i])
+                -- put it in to_dict
+                redis.call("hset", KEYS[4], ARGV[i], ARGV[i+1])
+                redis.call("zadd", KEYS[5], next_priority, ARGV[i])
+                count = count + 1
+            end
+            return count
+        else
+            -- ERROR: No longer own the lock
+            return -1
+        end
+        ''')
 
-        #logger.debug('move %r %r %r', from_dict, to_dict, items)
-        num_moved = conn.eval(script, 3, self._lock_name, 
-                              self._namespace(from_dict), 
-                              self._namespace(to_dict), 
-                              self._session_lock_identifier, *items)
+        # Experimental evidence suggests that redis-py passes
+        # *every* value as a string, maybe unless it's obviously
+        # a number.  Empty string is an easy "odd" value to test for.
+        if priority is None: priority = ''
+        num_moved = script(keys=[self._lock_name,
+                                 self._namespace(from_dict),
+                                 self._namespace(from_dict) + "keys",
+                                 self._namespace(to_dict),
+                                 self._namespace(to_dict) + "keys"],
+                           args=[self._session_lock_identifier,
+                                 priority] + items)
+        if num_moved == -1:
+            raise LockError()
         if num_moved != len(items) / 2:
             raise EnvironmentError(
                 'Registry failed to move all: num_moved = %d != %d len(items)'

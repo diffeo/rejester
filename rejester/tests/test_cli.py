@@ -246,6 +246,72 @@ def test_failed_one_details(manager, worker, loaded, work_spec):
     manager.runcmd('failed', ['-W', work_spec['name'], '--details'])
     assert manager.stdout.getvalue().startswith("u'" + unit.key + "': {")
 
+def test_retry_nothing_nothing(manager, work_spec):
+    manager.runcmd('retry', ['-W', work_spec['name']])
+    # This case never tests whether the work spec exists
+    #assert (manager.stdout.getvalue() ==
+    #        'Invalid work spec \'' + work_spec['name'] + '\'.\n')
+    assert manager.stdout.getvalue() == 'Nothing to do.\n'
+
+def test_retry_a_nothing_nothing(manager, work_spec):
+    manager.runcmd('retry', ['-W', work_spec['name'], '-a'])
+    # This case gets an empty list for failed work units and runs silently
+    #assert (manager.stdout.getvalue() ==
+    #        'Invalid work spec \'' + work_spec['name'] + '\'.\n')
+    assert manager.stdout.getvalue() == 'Nothing to do.\n'
+
+def test_retry_not_loaded(manager, work_spec):
+    manager.runcmd('retry', ['-W', work_spec['name'], 'key-0'])
+    assert (manager.stdout.getvalue() ==
+            'Invalid work spec \'' + work_spec['name'] + '\'.\n')
+
+def test_retry_nothing(manager, loaded, work_spec):
+    manager.runcmd('retry', ['-W', work_spec['name']])
+    assert manager.stdout.getvalue() == 'Nothing to do.\n'
+
+def test_retry_all_nothing(manager, loaded, work_spec):
+    manager.runcmd('retry', ['-W', work_spec['name'], '-a'])
+    assert manager.stdout.getvalue() == 'Nothing to do.\n'
+
+def test_retry_missing_nothing(manager, loaded, work_spec):
+    manager.runcmd('retry', ['-W', work_spec['name'], 'low-key'])
+    assert manager.stdout.getvalue() == "No such failed work unit 'low-key'.\n"
+
+def test_retry_fail_one_name(manager, worker, task_master, loaded,
+                             work_spec, work_units):
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == len(work_units)
+
+    unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
+    assert unit.work_spec_name == work_spec['name']
+    unit_name = unit.key
+    unit.fail()
+
+    assert task_master.num_failed(work_spec['name']) == 1
+    assert task_master.num_available(work_spec['name']) == len(work_units)-1
+
+    manager.runcmd('retry', ['-W', work_spec['name'], unit_name])
+    assert manager.stdout.getvalue() == ''
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == len(work_units)
+
+def test_retry_fail_one_all(manager, worker, task_master, loaded,
+                            work_spec, work_units):
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == len(work_units)
+
+    unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
+    assert unit.work_spec_name == work_spec['name']
+    unit.fail()
+
+    assert task_master.num_failed(work_spec['name']) == 1
+    assert task_master.num_available(work_spec['name']) == len(work_units)-1
+
+    manager.runcmd('retry', ['-W', work_spec['name'], '-a'])
+    assert manager.stdout.getvalue() == ''
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == len(work_units)
+
 def test_mode(manager):
     def mode(args, response):
         manager.runcmd('mode', args)

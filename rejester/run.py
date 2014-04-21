@@ -147,6 +147,7 @@ import yaml
 
 import dblogger
 import rejester
+from rejester.exceptions import NoSuchWorkSpecError, NoSuchWorkUnitError
 from rejester._task_master import TaskMaster
 from rejester.workers import run_worker, MultiWorker
 import yakonfig
@@ -289,13 +290,17 @@ class Manager(ArgParseCmd):
 
     def args_work_units(self, parser):
         self._add_work_spec_name_args(parser)
+        parser.add_argument('-n', '--limit', type=int, metavar='N',
+                            help='only print N work units')
         parser.add_argument('--details', action='store_true',
                             help='also print the contents of the work units')
     def do_work_units(self, args):
         '''list work units that have not yet completed'''
         work_spec_name = self._get_work_spec_name(args)
         work_units = self.task_master.list_work_units(work_spec_name)
-        for k in sorted(work_units.keys()):
+        work_unit_names = sorted(work_units.keys())
+        if args.limit: work_unit_names = work_unit_names[:args.limit]
+        for k in work_unit_names:
             if args.details:
                 self.stdout.write('{!r}: {!r}\n'.format(k, work_units[k]))
             else:
@@ -303,17 +308,56 @@ class Manager(ArgParseCmd):
 
     def args_failed(self, parser):
         self._add_work_spec_name_args(parser)
+        parser.add_argument('-n', '--limit', type=int, metavar='N',
+                            help='only print N work units')
         parser.add_argument('--details', action='store_true',
                             help='also print the contents of the work units')
     def do_failed(self, args):
         '''list failed work units'''
         work_spec_name = self._get_work_spec_name(args)
         work_units = self.task_master.list_failed_work_units(work_spec_name)
-        for k in sorted(work_units.keys()):
+        work_unit_names = sorted(work_units.keys())
+        if args.limit: work_unit_names = work_unit_names[:args.limit]
+        for k in work_unit_names:
             if args.details:
                 self.stdout.write('{!r}: {!r}\n'.format(k, work_units[k]))
             else:
                 self.stdout.write('{}\n'.format(k))
+
+    def args_retry(self, parser):
+        self._add_work_spec_name_args(parser)
+        parser.add_argument('-a', '--all', action='store_true',
+                            help='retry all failed jobs')
+        parser.add_argument('unit', nargs='*',
+                            help='work unit name(s) to retry')
+    def do_retry(self, args):
+        '''retry a specific failed job'''
+        work_spec_name = self._get_work_spec_name(args)
+        if args.all:
+            try:
+                units = self.task_master.list_failed_work_units(work_spec_name)
+            # NB: rejester never actually raises this exception, we get
+            # an empty "units" list instead
+            except NoSuchWorkSpecError, e:
+                self.stdout.write('Invalid work spec {!r}.\n'
+                                  .format(work_spec_name))
+                return
+        else:
+            units = args.unit
+        if not units:
+            self.stdout.write('Nothing to do.\n')
+            return
+        for unit in units:
+            try:
+                self.task_master.retry(work_spec_name, unit)
+            except NoSuchWorkSpecError, e:
+                self.stdout.write('Invalid work spec {!r}.\n'
+                                  .format(work_spec_name))
+                return
+            except NoSuchWorkUnitError, e:
+                self.stdout.write('No such failed work unit {!r}.\n'
+                                  .format(unit))
+                # and continue to the next unit
 
     def args_mode(self, parser):
         parser.add_argument('mode', choices=['idle', 'run', 'terminate'],

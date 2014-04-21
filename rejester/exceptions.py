@@ -21,6 +21,16 @@ class NoSuchWorkSpecError(RejesterException):
     """A `TaskMaster` function was called with a nonexistent work spec"""
     pass
 
+class NoSuchWorkUnitError(RejesterException):
+    '''Valid work spec but invalid work unit.
+
+    This occurs when a :class:`rejester.TaskMaster` function that
+    manipulates existing work units is called with a valid work spec name
+    but an invalid work unit name.
+
+    '''
+    pass
+
 class ProgrammerError(RejesterException):
     pass
 
