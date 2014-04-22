@@ -54,6 +54,18 @@ def test_task_master_basic_interface(task_master):
 
     assert 'status' in task_master.inspect_work_unit(work_spec['name'], work_unit.key)
 
+def test_list_work_specs(task_master):
+    # Initial state: nothing
+    assert task_master.list_work_specs() == {}
+    
+    work_units = dict(foo={ 'length': 3 }, foobar={ 'length': 6 })
+    task_master.update_bundle(work_spec, work_units)
+
+    specs = task_master.list_work_specs()
+    assert len(specs) == 1
+    assert work_spec['name'] in specs
+    assert specs[work_spec['name']]['desc'] == work_spec['desc']
+
 def test_list_work_units(task_master):
     work_units = dict(foo={ 'length': 3 }, foobar={ 'length': 6 })
     task_master.update_bundle(work_spec, work_units)

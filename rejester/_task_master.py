@@ -487,6 +487,15 @@ class TaskMaster(object):
             num_tasks=self.num_tasks(work_spec_name),
             )
 
+    def list_work_specs(self):
+        '''Get the dictionary of work specs.
+
+        The keys are the work spec names; the values are the actual
+        work spec definitions.
+
+        '''
+        with self.registry.lock(atime=1000) as session:
+            return session.pull(WORK_SPECS)
 
     def get_work_spec(self, work_spec_name):
         '''Get the dictionary defining some work spec.'''

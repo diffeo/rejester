@@ -272,6 +272,13 @@ class Manager(ArgParseCmd):
         self.stdout.write('deleting namespace {!r}\n'.format(namespace))
         self.task_master.registry.delete_namespace()
 
+    def args_work_specs(self, parser):
+        pass
+    def do_work_specs(self, args):
+        '''print the names of all of the work specs'''
+        for name in sorted(self.task_master.list_work_specs().keys()):
+            self.stdout.write('{}\n'.format(name))
+
     def args_work_spec(self, parser):
         self._add_work_spec_name_args(parser)
     def do_work_spec(self, args):

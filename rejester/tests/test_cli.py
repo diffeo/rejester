@@ -123,6 +123,14 @@ def test_delete(manager, loaded, work_spec, namespace_string):
     spec = manager.task_master.get_work_spec(work_spec['name'])
     assert spec is None
 
+def test_work_specs_empty(manager):
+    manager.runcmd('work_specs', [])
+    assert manager.stdout.getvalue() == ''
+
+def test_work_specs_loaded(manager, loaded, work_spec):
+    manager.runcmd('work_specs', [])
+    assert manager.stdout.getvalue() == work_spec['name'] + '\n'
+
 def test_work_spec_bad(manager, loaded, tmpdir):
     with pytest.raises(SystemExit):
         manager.runcmd('work_spec', [])
