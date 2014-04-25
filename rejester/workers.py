@@ -1,7 +1,37 @@
 '''Rejester workers.
 
 .. This software is released under an MIT/X11 open source license.
-   Copyright 2012-2013 Diffeo, Inc.
+   Copyright 2012-2014 Diffeo, Inc.
+
+The standard worker infrastructure in the classes below calls
+:meth:`rejester.WorkUnit.run` on individual work units as they become
+available.  In normal use, a caller will use
+:meth:`rejester.TaskMaster.update_bundle` to submit jobs, then expect
+an external caller to run ``rejester run_worker``, which will create a
+:class:`MultiWorker` object that runs those jobs.
+
+Other implementation strategies are definitely possible.  The
+:class:`SingleWorker` class here will run exactly one job when
+invoked.  It is also possible for a program that intends to do some
+work, possibly even in parallel, but wants to depend on rejester for
+queueing, to call :meth:`rejester.TaskMaster.get_work` itself and do
+work based on whatever information is in the work spec; that would not
+use this worker infrastructure at all.
+
+.. autoclass:: SingleWorker
+    :members:
+    :show-inheritance:
+
+.. autoclass:: MultiWorker
+    :members:
+    :show-inheritance:
+
+.. autoclass:: HeadlessWorker
+    :members:
+    :show-inheritance:
+
+.. autofunction:: run_worker
+
 '''
 from __future__ import absolute_import
 import os
@@ -39,10 +69,16 @@ def run_worker(worker_class, *args, **kwargs):
     '''Bridge function to run a worker under :mod:`multiprocessing`.
 
     The :mod:`multiprocessing` module cannot
-    :func:`~multiprocessing.apply_async` to a class constructor, even
-    if the ``__init__`` calls ``.run()``, so this simple wrapper calls
-    ``worker_class(*args, **kwargs)`` and logs any exceptions before
-    re-raising them.
+    :meth:`~multiprocessing.Pool.apply_async` to a class constructor,
+    even if the ``__init__`` calls ``.run()``, so this simple wrapper
+    calls ``worker_class(*args, **kwargs)`` and logs any exceptions
+    before re-raising them.
+
+    This is usually only used to create a :class:`HeadlessWorker`, but
+    it does run through the complete
+    :meth:`~rejester.Worker.register`, :meth:`~rejester.Worker.run`,
+    :meth:`~rejester.Worker.unregister` sequence with some logging
+    on worker-level failures.
 
     '''
     try:
@@ -62,8 +98,13 @@ def run_worker(worker_class, *args, **kwargs):
 
 
 class HeadlessWorker(Worker):
-    '''This expects to receive a WorkUnit from its parent process, which
-    is running MultiWorker.
+    '''Child worker to do work under :mod:`multiprocessing`.
+
+    The :meth:`run` method expects to run a single
+    :class:`~rejester.WorkUnit`, which it will receive from its
+    parent :class:`MultiWorker`.  This class expects to be the only
+    thing run in a :mod:`multiprocessing` child process.
+
     '''
 
     def __init__(self, config, worker_id, work_spec_name, work_unit_key):
@@ -110,10 +151,31 @@ class HeadlessWorker(Worker):
         sys.exit()
 
 class MultiWorker(Worker):
-    '''launches one child process per core on the machine, and reports
-    available_gb based on what measurements.  This class manages the
-    TaskMaster interactions and sends WorkUnit instances to child
+    '''Parent worker that runs multiple jobs continuously.
+    
+    This uses :mod:`multiprocessing` to run one child
+    :class:`HeadlessWorker` per core on the system, and averages
+    system memory to report `available_gb`.  This class manages the
+    :class:`~rejester.TaskMaster` interactions and sends
+    :class:`~rejester.WorkUnit` instances to its managed child
     processes.
+
+    This class is normally invoked from the command line by
+    running ``rejester run_worker``, which runs this class as a
+    daemon process.
+
+    Instances of this class, running across many machines in a
+    cluster, are controlled by :meth:`rejester.TaskMaster.get_mode`.
+    The :meth:`run` method will exit if the current mode is
+    :attr:`~rejester.TaskMaster.TERMINATE`.  If the mode is
+    :attr:`~rejester.TaskMaster.IDLE` then the worker will stay
+    running but will not start new jobs.  New jobs will be started
+    only when the mode becomes :attr:`~rejester.TaskMaster.RUN`.  The
+    system defaults to :attr:`~rejester.TaskMaster.IDLE` state, but if
+    workers exit immediately, it may be because the mode has been left
+    at :attr:`~rejester.TaskMaster.TERMINATE` from a previous
+    execution.
+
     '''
     def __init__(self, config):
         super(MultiWorker, self).__init__(config)
@@ -196,6 +258,20 @@ class MultiWorker(Worker):
                         hasWork = False
 
     def run(self):
+        '''Fetch and dispatch jobs as long as the system is running.
+
+        This periodically checks the :class:`rejester.TaskMaster` mode
+        and asks it for more work.  It will normally run forever in a
+        loop until the mode becomes
+        :attr:`~rejester.TaskMaster.TERMINATE`, at which point it
+        waits for all outstanding jobs to finish and exits.
+
+        This will :func:`~rejester.Worker.heartbeat` and check for new
+        work whenever a job finishes, or otherwise on a random
+        interval between 1 and 5 seconds.
+
+        '''
+
         tm = self.task_master
         num_workers = multiprocessing.cpu_count()
         if self.pool is None:
@@ -235,3 +311,26 @@ class MultiWorker(Worker):
                 # it's cool, timed out, do the loop of checks and stuff.
 
         logger.info('MultiWorker exiting')
+
+class SingleWorker(Worker):
+    '''Worker that runs exactly one job when called.'''
+    def run(self):
+        '''Get exactly one job, run it, and return.
+
+        Does nothing (but returns :const:`False`) if there is no work
+        to do.  Ignores the global mode; this will do work even
+        if :func:`rejester.TaskMaster.get_mode` returns
+        :attr:`~rejester.TaskMaster.TERMINATE`.
+
+        :return: :const:`True` if there was a job (even if it failed)
+
+        '''
+        available_gb = MultiWorker.available_gb()
+        unit = self.task_master.get_work(self.worker_id, available_gb)
+        if unit is None: return False
+        try:
+            unit.run()
+            unit.finish()
+        except Exception, e:
+            unit.fail(e)
+        return True

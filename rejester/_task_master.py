@@ -513,6 +513,56 @@ class TaskMaster(object):
         with self.registry.lock(atime=1000) as session:
             return session.pull(WORK_UNITS_ + work_spec_name)
 
+    def list_available_work_units(self, work_spec_name):
+        """Get a dictionary of available work units for some work spec.
+
+        The dictionary is from work unit name to work unit definiton.
+        Only work units that have not been started, or units that were
+        started but did not complete in a timely fashion, are
+        included.
+
+        """
+        with self.registry.lock(atime=1000) as session:
+            return session.filter(WORK_UNITS_ + work_spec_name,
+                                  priority_max=time.time())
+
+    def list_pending_work_units(self, work_spec_name):
+        """Get a dictionary of in-progress work units for some work spec.
+
+        The dictionary is from work unit name to work unit definiton.
+        Units listed here should be worked on by some worker.
+
+        """
+        with self.registry.lock(atime=1000) as session:
+            return session.filter(WORK_UNITS_ + work_spec_name,
+                                  priority_min=time.time())
+
+    def list_blocked_work_units(self, work_spec_name):
+        """Get a dictionary of blocked work units for some work spec.
+
+        The dictionary is from work unit name to work unit definiton.
+        Work units included in this list are blocked because they were
+        listed as the first work unit in
+        :func:`add_dependent_work_units`, and the work unit(s) they
+        depend on have not completed yet.  This function does not tell
+        why work units are blocked, it merely returns the fact that
+        they are.
+
+        """
+        with self.registry.lock(atime=1000) as session:
+            return session.pull(WORK_UNITS_ + work_spec_name + _BLOCKED)
+
+    def list_finished_work_units(self, work_spec_name):
+        """Get a dictionary of finished work units for some work spec.
+
+        The dictionary is from work unit name to work unit definiton.
+        Only work units that have been successfully completed are
+        included.
+
+        """
+        with self.registry.lock(atime=1000) as session:
+            return session.pull(WORK_UNITS_ + work_spec_name + _FINISHED)
+
     def list_failed_work_units(self, work_spec_name):
         """Get a dictionary of failed work units for some work spec.
 

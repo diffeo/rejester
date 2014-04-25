@@ -45,10 +45,6 @@ Workers
    :show-inheritance:
 
 .. automodule:: rejester.workers
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 .. currentmodule:: rejester
 
 Implementation Details

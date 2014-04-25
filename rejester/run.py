@@ -149,7 +149,7 @@ import dblogger
 import rejester
 from rejester.exceptions import NoSuchWorkSpecError, NoSuchWorkUnitError
 from rejester._task_master import TaskMaster
-from rejester.workers import run_worker, MultiWorker
+from rejester.workers import run_worker, MultiWorker, SingleWorker
 import yakonfig
 from yakonfig.cmd import ArgParseCmd
 
@@ -182,6 +182,11 @@ class Manager(ArgParseCmd):
         ArgParseCmd.__init__(self)
         self._config = None
         self._task_master = None
+        self.exitcode = 0
+
+    def precmd(self, line):
+        self.exitcode = 0
+        return ArgParseCmd.precmd(line)
 
     @property
     def config(self):
@@ -397,6 +402,20 @@ class Manager(ArgParseCmd):
                 for hk, hv in heartbeat.iteritems():
                     self.stdout.write('  {}: {}\n'.format(hk, hv))
 
+    def args_run_one(self, parser):
+        pass
+    def do_run_one(self, args):
+        '''run a single job'''
+        worker = SingleWorker(self.config)
+        worker.register()
+        rc = False
+        try:
+            rc = worker.run()
+        finally:
+            worker.unregister()
+        if not rc:
+            self.exitcode = 2
+
     def args_run_worker(self, parser):
         parser.add_argument('--pidfile', metavar='FILE', type=absolute_path,
                             help='file to hold process ID of worker')
@@ -456,6 +475,7 @@ def main():
     mgr.add_arguments(parser)
     args = yakonfig.parse_args(parser, [yakonfig, dblogger, rejester])
     mgr.main(args)
+    sys.exit(mgr.exitcode)
 
 if __name__ == '__main__':
     main()

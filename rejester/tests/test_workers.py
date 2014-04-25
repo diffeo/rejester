@@ -15,7 +15,7 @@ import sys
 import pytest
 
 import rejester
-from rejester.workers import run_worker, MultiWorker
+from rejester.workers import run_worker, MultiWorker, SingleWorker
 
 logger = logging.getLogger(__name__)
 pytest_plugins = 'rejester.tests.fixtures'
@@ -58,6 +58,40 @@ work_spec = dict(
     run_function = 'work_program',
     terminate_function = 'work_program',
 )
+
+def test_single_worker(task_master):
+    work_units = {'key{}'.format(x): { 'config': task_master.registry.config,
+                                       'sleep': 1 }
+                  for x in xrange(2)}
+    task_master.update_bundle(work_spec, work_units)
+    assert task_master.num_finished(work_spec['name']) == 0
+    assert task_master.num_available(work_spec['name']) == 2
+
+    worker = SingleWorker(task_master.config)
+    worker.register()
+    rc = worker.run()
+    assert rc is True
+    worker.unregister()
+    assert task_master.num_pending(work_spec['name']) == 0
+    assert task_master.num_failed(work_spec['name']) == 0
+    assert task_master.num_finished(work_spec['name']) == 1
+    assert task_master.num_available(work_spec['name']) == 1
+
+    worker = SingleWorker(task_master.config)
+    worker.register()
+    rc = worker.run()
+    assert rc is True
+    worker.unregister()
+    assert task_master.num_finished(work_spec['name']) == 2
+    assert task_master.num_available(work_spec['name']) == 0
+
+    worker = SingleWorker(task_master.config)
+    worker.register()
+    rc = worker.run()
+    assert rc is False
+    worker.unregister()
+    assert task_master.num_finished(work_spec['name']) == 2
+    assert task_master.num_available(work_spec['name']) == 0
 
 @contextlib.contextmanager
 def run_multi_worker(task_master, duration):
