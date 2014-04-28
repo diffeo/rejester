@@ -186,7 +186,7 @@ class Manager(ArgParseCmd):
 
     def precmd(self, line):
         self.exitcode = 0
-        return ArgParseCmd.precmd(line)
+        return ArgParseCmd.precmd(self, line)
 
     @property
     def config(self):
