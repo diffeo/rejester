@@ -36,13 +36,34 @@ WORKER_OBSERVED_MODE = 'WORKER_OBSERVED_MODE'
 ACTIVE_LEASES = 'ACTIVE_LEASES'
 
 class Worker(object):
+    '''Process that runs rejester jobs.
+
+    Running a worker involves three steps: calling :meth:`register` to
+    get a :attr:`worker_id` and record our presence in the data store;
+    calling :meth:`run` to actually do work; and calling :meth:`unregister`
+    on clean exit.  The :meth:`run` method should periodically call
+    :meth:`heartbeat` to update its state and get the current run mode.
+
+    ..automethod:: __init__
+
+    '''
 
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, config):
+        '''Create a new worker.
+
+        :param dict config: Configuration for the worker, typically
+          the contents of the ``rejester`` block in the global config
+
+        '''
+        #: Configuration for the worker
         self.config = config
+        #: Task interface to talk to the data store
         self.task_master = TaskMaster(config)
+        #: Worker ID, only valid after :meth:`register`
         self.worker_id = None
+        #: Required maximum time between :meth:`heartbeat`
         self.lifetime = 300 ## five minutes
 
     def environment(self):
@@ -95,10 +116,13 @@ class Worker(object):
         self.worker_id = None
 
     def heartbeat(self):
-        '''record the current worker state in the registry and also the
-        observed mode and return it
+        '''Record the current worker state in the registry.
 
-        :returns mode:
+        This records the worker's current mode, plus the contents of
+        :meth:`environment`, in the data store for inspection by others.
+
+        :returns mode: Current mode, as :meth:`TaskMaster.get_mode`
+
         ''' 
         mode = self.task_master.get_mode()
         with self.task_master.registry.lock() as session:
@@ -111,38 +135,106 @@ class Worker(object):
 
     @abc.abstractmethod
     def run(self):
+        '''Run some number of jobs.
+
+        :meth:`register` must have already been called.  This is
+        expected to get jobs using :meth:`TaskMaster.get_work` with
+        this worker's :attr:`worker_id`.  Depending on the semantics
+        of the actual implementing class this may run one job, run
+        jobs as long as the worker's mode is :attr:`~TaskMaster.RUN`,
+        or any other combination.
+
+        '''
         return
 
 
 class WorkUnit(object):
-    def __init__(self, registry, work_spec_name, key, data, worker_id=None, expires=None):
+    '''A single unit of work being executed.
+
+    These are created by the rejester system; the standard worker
+    system will pass objects of this type to the named run function.
+    If some code calls:
+
+    .. code-block:: python
+
+        task_master.update_bundle({ 'name': 'work_spec_name', ... },
+                                  { 'key': data, ... })
+
+    Then when the work unit is executed, this object will have the
+    provided :attr:`work_spec_name`, :attr:`key`, and :attr:`data`,
+    with remaining values being provided by the system.
+
+    In the standard worker system, the worker will call :meth:`finish`
+    or :meth:`fail` as appropriate.  The run function should examine
+    :attr:`spec`, :attr:`key`, and :attr:`data` to figure out what to
+    do.
+
+    .. automethod:: __init__
+
+    '''
+    def __init__(self, registry, work_spec_name, key, data, worker_id=None,
+                 expires=None):
+        '''Create a new work unit runtime data.
+
+        In most cases application code will not need to call this directly,
+        but should expect to be passed work units created by the system.
+
+        :param registry: Mid-level Redis interface
+        :type registry: :class:`rejester.Registry`
+        :param str work_spec_name: Name of the work spec
+        :param str key: Name of the work unit
+        :param dict data: Data provided for the work unit
+        :param str worker_id: Worker doing this work unit
+        :param int expires: Latest time this work unit can still be running
+
+        '''
         if not worker_id:
             raise ProgrammerError('must specify a worker_id, not: %r' % worker_id)
+        #: Worker doing this work unit
         self.worker_id = worker_id
+        #: Mid-level Redis interface
         self.registry = registry
+        #: Name of the work spec
         self.work_spec_name = work_spec_name
+        #: Name of the work unit
         self.key = key
+        #: Data provided for the work unit
         self.data = data
+        #: Has this work unit called :meth:`finish`?
         self.finished = False
+        #: Has this work unit called :meth:`fail`?
         self.failed = False
-        self.expires = expires  # time.time() when lease expires
+        #: Time (as :func:`time.time`) when this work unit must finish
+        self.expires = expires
         self._spec_cache = None  # storage for lazy getter property
         self._module_cache = None  # storage for lazy getter property
-        logger.debug('WorkUnit init %r', self.key)
 
     def __repr__(self):
         return 'WorkUnit(key=%s)' % self.key
 
-    # lazy caching getter for work spec
     @property
     def spec(self):
+        '''Actual work spec.
+
+        This is retrieved from the database on first use, and in some cases
+        a worker can be mildly more efficient if it avoids using this.
+
+        '''
         if self._spec_cache is None:
             self._spec_cache = self.registry.get(WORK_SPECS, self.work_spec_name)
         return self._spec_cache
 
-    # lazy caching getter for module
     @property
     def module(self):
+        '''Python module to run the job.
+
+        This is used by :func:`run` and the standard worker system.
+        If the work spec contains keys ``module``, ``run_function``,
+        and ``terminate_function``, then this contains the Python
+        module object named as ``module``; otherwise this contains
+        :const:`None`.
+
+        '''
         if self._module_cache is None:
             funclist = filter(None, (self.spec.get('run_function'), self.spec.get('terminate_function')))
             if funclist:
@@ -156,8 +248,14 @@ class WorkUnit(object):
         return self._module_cache
 
     def run(self):
-        '''execute this WorkUnit using the function specified in its
-        work_spec.  Is called multiple times.
+        '''Actually runs the work unit.
+
+        This is called by the standard worker system, generally
+        once per work unit.  It requires the work spec to contain
+        keys ``module``, ``run_function``, and ``terminate_function``.
+        It looks up ``run_function`` in :attr:`module` and calls that
+        function with :const:`self` as its only parameter.
+
         '''
         run_function = getattr(self.module, self.spec['run_function'])
         logger.info('running work unit {}'.format(self.key))
@@ -172,8 +270,17 @@ class WorkUnit(object):
             raise
 
     def terminate(self):
-        '''shutdown this WorkUnit using the function specified in its
-        work_spec.  Is called multiple times.
+        '''Kills the work unit.
+
+        This is called by the standard worker system, but only in
+        response to an operating system signal.  If the job does setup
+        such as creating a child process, its terminate function
+        should kill that child process.  More specifically, this
+        function requires the work spec to contain the keys
+        ``module``, ``run_function``, and ``terminate_function``, and
+        calls ``terminate_function`` in :attr:`module` containing
+        :const:`self` as its only parameter.
+
         '''
         terminate_function_name = self.spec.get('terminate_function')
         if not terminate_function_name:
@@ -190,13 +297,17 @@ class WorkUnit(object):
         return ret_val
 
     def update(self, lease_time=300):
-        '''reset the task lease by incrementing lease_time.  Default is to put
-        it five minutes ahead of now.  Setting lease_time<0 will drop
-        the lease.
+        '''Refresh this task's expiration time.
 
-        If the worker waited too long since the previous call to
-        update and another worker has taken this WorkUnit, then this
-        raises rejester.exceptions.LostLease
+        This tries to set the task's expiration time to the current
+        time, plus `lease_time` seconds.  It requires the job to not
+        already be complete.  If `lease_time` is negative, makes the
+        job immediately be available for other workers to run.
+
+        :param int lease_time: time to extend job lease beyond now
+        :raises rejester.exceptions.LostLease: if the lease has already
+          expired
+
         '''
         if self.finished:
             raise ProgrammerError('cannot .update() after .finish()')
@@ -221,7 +332,12 @@ class WorkUnit(object):
                 raise LostLease(exc)
                 
     def finish(self):
-        '''move this WorkUnit to finished state
+        '''Move this work unit to a finished state.
+
+        In the standard worker system, the worker calls this on the job's
+        behalf when :meth:`run_function` returns successfully.  Does nothing
+        if the work unit is already complete.
+
         '''
         if self.finished or self.failed:
             return
@@ -256,8 +372,25 @@ class WorkUnit(object):
         self.finished = True
 
     def fail(self, exc=None):
-        '''move this WorkUnit to failed state and record info about the
-        worker
+        '''Move this work unit to a failed state.
+
+        In the standard worker system, the worker calls this on the job's
+        behalf when :meth:`run_function` ends with any exception:
+
+        .. code-block:: python
+
+            try:
+                work_unit.run()
+                work_unit.finish()
+            except Exception, e:
+                work_unit.fail(e)
+
+        A ``traceback`` property is recorded with a formatted version
+        of `exc`, if any.  Does nothing if the work unit is already
+        complete.
+
+        :param exc: Exception that caused the failure, or :const:`None`
+
         '''
         if self.failed or self.finished:
             return
@@ -310,10 +443,66 @@ class TaskMaster(object):
     configuration information, and each work spec has some number of
     *work units* attached to it.  Both the work specs and work units
     are defined as (non-empty) dictionaries.  The work spec must have
-    keys 'name' and 'min_gb'; in typical use, 'module' names a Python
-    module, 'run_function' and 'terminate_function' name specific
-    functions within that module, and 'config' provides a
-    configuration dictionary as well.
+    keys ``name`` and ``min_gb``, but any other properties are permitted.
+    Conventionally ``desc`` contains a description of the job and
+    ``config`` contains the top-level global configuration.
+
+    There are three ways to use :class:`TaskMaster`:
+
+    1. Create work specs and work units with :meth:`update_bundle`.
+       Directly call :meth:`get_work` to get work units back.  Based
+       on the information stored in the work spec and work unit
+       dictionaries, do the work manually, and call
+       :meth:`WorkUnit.finish` or :meth:`WorkUnit.fail` as
+       appropriate.
+
+    2. Create work specs and work units with :meth:`update_bundle`.
+       The work spec must contain three keys, ``module`` naming a Python
+       module, and ``run_function`` and ``terminate_function`` each
+       naming functions of a single parameter in that module.  Directly
+       call :meth:`get_work` to get work units back, then call their
+       :meth:`WorkUnit.run` function to execute them.  See the basic
+       example in :meth:`WorkUnit.fail`.
+
+    3. Create work specs and work units with :meth:`update_bundle`,
+       including the Python information.  Use one of the standard worker
+       implementations in :mod:`rejester.workers` to actually run the
+       job.
+
+    Most applications will use the third option, the standard worker
+    system.  In all three cases populating and executing jobs can
+    happen on different systems, or on multiple systems in parallel.
+    To use the standard worker system, create a Python module::
+
+        def rejester_run(work_unit):
+            # Does the actual work for `work_unit`.
+            # Must be a top-level function in the module.
+            # The work unit will succeed if this returns normally,
+            # and will fail if this raises an exception.
+            pass
+
+        def rejester_terminate(work_unit):
+            # Called only if a signal terminates the worker.
+            # This usually does nothing, but could kill a known subprocess.
+            pass
+
+    The work spec would look something like::
+
+        work_spec = {
+            'name': 'rejester_sample',
+            'desc': 'A sample rejester job.',
+            'min_gb': 1,
+            'config': yakonfig.get_global_config(),
+            'module': 'name.of.the.module.from.above',
+            'run_function': 'rejester_run',
+            'terminate_function': 'rejester_terminate',
+        }
+
+    The work units can be any non-empty dictionaries that are
+    meaningful to the run function.  :class:`WorkUnit` objects are
+    created with their :attr:`~WorkUnit.key` and :attr:`~WorkUnit.data`
+    fields set to individual keys and values from the parameter to
+    :meth:`update_bundle`.
 
     A work unit can be in one of five states.  It is *available* if it
     has been added to the queue but nobody is working on it.  It is
@@ -322,38 +511,58 @@ class TaskMaster(object):
     dependencies are added between tasks using `add_dependent_task()`,
     a task can also be *blocked*.
 
-    The general flow for a rejester application is to
-    `set_mode(IDLE)`, then add work units using `update_bundle()`, and
-    `set_mode(RUN)`.  `get_work()` will return work units until all
-    have been consumed.  `set_mode(TERMINATE)` will instruct workers
-    to shut down.
+    The general flow for a rejester application is to :meth:`set_mode`
+    to :attr:`IDLE`, then add work units using
+    :meth:`update_bundle()`, and :meth:`set_mode` to :attr:`RUN`.
+    :meth:`get_work` will return work units until all have been
+    consumed.  :meth:`set_mode` to :attr:`TERMINATE` will instruct
+    workers to shut down.
 
     This object keeps very little state locally and can safely be used
     concurrently, including from multiple systems.  Correspondingly,
-    any settings here, including `set_mode()`, are persistent even
+    any settings here, including :meth:`set_mode`, are persistent even
     beyond the end of the current process.
+
+    .. automethod:: __init__
 
     '''
 
     def __init__(self, config):
+        '''Create a new task master.
+
+        This is a lightweight object, and it is safe to have multiple
+        objects concurrently accessing the same rejester system, even
+        on multiple machines.
+
+        :param dict config: Configuration for the task master, generally
+          the contents of the ``rejester`` block in the global configuration
+        
+        '''
         config['app_name'] = 'rejester'
+        #: Configuration for the task master
         self.config = config
+        #: Mid-level Redis interface
         self.registry = Registry(config)
 
+    #: Mode constant instructing workers to do work
     RUN = 'RUN'
+    #: Mode constant instructing workers to not start new work
     IDLE = 'IDLE'
+    #: Mode constant instructing workers to shut down
     TERMINATE = 'TERMINATE'
 
     def set_mode(self, mode):
         '''Set the global mode of the rejester system.
 
-        This must be one of the constants `TERMINATE`, `RUN`, or `IDLE`.
-        `TERMINATE` instructs any running workers to do an orderly
-        shutdown.  `IDLE` instructs workers to stay running but not
-        start new jobs.  `RUN` tells workers to do actual work.
+        This must be one of the constants :attr:`TERMINATE`,
+        :attr:`RUN`, or :attr:`IDLE`.  :attr:`TERMINATE` instructs any
+        running workers to do an orderly shutdown, completing current
+        jobs then exiting.  :attr:`IDLE` instructs workers to stay
+        running but not start new jobs.  :attr:`RUN` tells workers to
+        do actual work.
 
         :param str mode: new rejester mode
-        :raise ProgrammerError: on invalid `mode`
+        :raise rejester.exceptions.ProgrammerError: on invalid `mode`
 
         '''
         if not mode in [self.TERMINATE, self.RUN, self.IDLE]:
@@ -365,13 +574,30 @@ class TaskMaster(object):
     def get_mode(self):
         '''Get the global mode of the rejester system.
 
-        :return: rejester mode, `IDLE` if unset
+        :return: rejester mode, :attr:`IDLE` if unset
 
         '''
         with self.registry.lock() as session:
             return session.get('modes', 'mode') or self.IDLE
 
     def idle_all_workers(self):
+        '''Set the global mode to :attr:`IDLE` and wait for workers to stop.
+
+        This can wait arbitrarily long before returning.  The worst
+        case in "normal" usage involves waiting five minutes for a
+        "lost" job to expire; a well-behaved but very-long-running job
+        can extend its own lease further, and this function will not
+        return until that job finishes (if ever).
+
+        .. deprecated:: 0.4.5
+            There isn't an obvious use case for this function, and its
+            "maybe wait forever for something out of my control" nature
+            makes it hard to use in real code.  Polling all of the work
+            specs and their :meth:`num_pending` in application code if
+            you really needed this operation would have the same
+            semantics and database load.
+
+        '''
         self.set_mode(self.IDLE)
         while 1:
             num_pending = dict()
@@ -383,8 +609,12 @@ class TaskMaster(object):
             time.sleep(1)
 
     def mode_counts(self):
-        '''counts the modes observed by workers who heartbeated within one
-        lifetime of the present time.
+        '''Get the number of workers in each mode.
+
+        This returns a dictionary where the keys are mode constants
+        and the values are a simple integer count of the number of
+        workers in that mode.
+
         '''
         modes = {self.RUN: 0, self.IDLE: 0, self.TERMINATE: 0}
         for worker_id, mode in self.workers().items():
@@ -392,9 +622,13 @@ class TaskMaster(object):
         return modes
 
     def workers(self, alive=True):
-        '''returns dictionary of all worker_ids and current mode.  If
-        alive=True, then only include worker_ids that have heartbeated
-        within one lifetime of now.
+        '''Get a listing of all workers.
+
+        This returns a dictionary mapping worker ID to the mode
+        constant for their last observed mode.
+
+        :param bool alive: if true (default), only include workers
+          that have called :meth:`Worker.heartbeat` sufficiently recently
 
         '''
         with self.registry.lock() as session:
@@ -448,7 +682,13 @@ class TaskMaster(object):
 
     @classmethod
     def validate_work_spec(cls, work_spec):
-        'raise ProgrammerError if work_spec is invalid'
+        '''Check that `work_spec` is valid.
+
+        It must at the very minimum contain a ``name`` and ``min_gb``.
+
+        :raise rejester.exceptions.ProgrammerError: if it isn't valid
+
+        '''
         if 'name' not in work_spec:
             raise ProgrammerError('work_spec lacks "name"')
         if 'min_gb' not in work_spec or \
@@ -456,28 +696,68 @@ class TaskMaster(object):
             raise ProgrammerError('work_spec["min_gb"] must be a number')
 
     def num_available(self, work_spec_name):
+        '''Get the number of available work units for some work spec.
+
+        These are work units that could be returned by :meth:`get_work`:
+        they are not complete, not currently executing, and not blocked
+        on some other work unit.
+
+        '''
         return self.registry.len(WORK_UNITS_ + work_spec_name, 
                                  priority_max=time.time())
 
     def num_pending(self, work_spec_name):
+        '''Get the number of pending work units for some work spec.
+
+        These are work units that some worker is currently working on
+        (hopefully; it could include work units assigned to workers that
+        died and that have not yet expired).
+
+        '''
         return self.registry.len(WORK_UNITS_ + work_spec_name, 
                                  priority_min=time.time())
 
     def num_blocked(self, work_spec_name):
+        '''Get the number of blocked work units for some work spec.
+
+        These are work units that are the first parameter to
+        :meth:`add_dependent_work_units` where the job they depend on
+        has not yet completed.
+
+        '''
         return self.registry.len(WORK_UNITS_ + work_spec_name + _BLOCKED)
 
     def num_finished(self, work_spec_name):
+        '''Get the number of finished work units for some work spec.
+
+        These have completed successfully with :meth:`WorkUnit.finish`.
+
+        '''
         return self.registry.len(WORK_UNITS_ + work_spec_name + _FINISHED)
 
     def num_failed(self, work_spec_name):
+        '''Get the number of failed work units for some work spec.
+
+        These have completed unsuccessfully with :meth:`WorkUnit.fail`.
+
+        '''
         return self.registry.len(WORK_UNITS_ + work_spec_name + _FAILED)
 
     def num_tasks(self, work_spec_name):
+        '''Get the total number of work units for some work spec.'''
         return self.num_finished(work_spec_name) + \
                self.num_failed(work_spec_name) + \
                self.registry.len(WORK_UNITS_ + work_spec_name)
 
     def status(self, work_spec_name):
+        '''Get a summary dictionary for some work spec.
+
+        The keys are the strings :meth:`num_available`, :meth:`num_pending`,
+        :meth:`num_blocked`, :meth:`num_finished`, :meth:`num_failed`,
+        and :meth:`num_tasks`, and the values are the values returned
+        from those functions.
+
+        '''
         return dict(
             num_available=self.num_available(work_spec_name),
             num_pending=self.num_pending(work_spec_name),
@@ -602,6 +882,18 @@ class TaskMaster(object):
 
 
     def reset_all(self, work_spec_name):
+        '''Restart a work spec.
+
+        This calls :meth:`idle_all_workers`, then moves all finished
+        jobs back into the available queue.
+
+        .. deprecated:: 0.4.5
+            See :meth:`idle_all_workers` for problems with that method.
+            This also ignores failed jobs and work unit dependencies.
+            In practice, whatever generated a set of work units
+            initially can recreate them easily enough.
+
+        '''
         self.idle_all_workers()
         with self.registry.lock(ltime=10000) as session:
             session.move_all(WORK_UNITS_ + work_spec_name + _FINISHED,
@@ -612,11 +904,15 @@ class TaskMaster(object):
         '''Load a work spec and some work units into the task list.
         
         update the work_spec and work_units.  Overwrites any existing
-        work_spec with the same ``work_spec['name']`` and similarly
+        work spec with the same ``work_spec['name']`` and similarly
         overwrites any WorkUnit with the same ``work_unit.key``
 
-        :param work_units: dict of dicts where the keys are used as
-          WorkUnit.key and the values are used as WorkUnit.data
+        :param dict work_spec: Work spec dictionary
+        :param work_units: Keys are used as :attr:`WorkUnit.key`, values
+          are used as :attr:`WorkUnit.data`
+        :type work_units: dict of dict
+        :param int nice: Niceness of `work_spec`, higher value is lower
+          priority
 
         '''
         self.validate_work_spec(work_spec)
@@ -677,8 +973,8 @@ class TaskMaster(object):
           if `depends_on` fails
         :return: :const:`True`, unless one or both of the work units
           didn't exist and weren't specified, in which case, :const:`False`
-        :raise NoSuchWorkSpecError: if a work spec was named that doesn't
-          exist
+        :raise rejester.exceptions.NoSuchWorkSpecError: if a work spec was
+          named that doesn't exist
 
         """
         # There's no good, not-confusing terminology here.
