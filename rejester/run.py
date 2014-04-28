@@ -113,6 +113,10 @@ given on the command line.  The tool provides the following commands:
     workers will stop execution as soon as they finish their running
     jobs.
 
+.. describe:: run_one
+
+    Get a single task, and run it.
+
 .. describe:: workers
 
     List all of the known workers.  With ``--all`` include workers
