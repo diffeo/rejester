@@ -103,6 +103,10 @@ given on the command line.  The tool provides the following commands:
     units.  ``failed -W name --details`` should include a traceback
     indicating why the work unit failed.
 
+.. describe:: work_unit --work-spec-name name unitname
+
+    Prints out basic details for a work unit, in any state.
+
 .. describe:: mode [idle|run|terminate]
 
     With no arguments, print out the current rejester mode; otherwise
@@ -144,6 +148,7 @@ import logging
 import logging.config
 import os
 import sys
+import time
 import traceback
 
 import daemon
@@ -184,6 +189,7 @@ def absolute_path(string):
 class Manager(ArgParseCmd):
     def __init__(self):
         ArgParseCmd.__init__(self)
+        self.prompt = 'rejester> '
         self._config = None
         self._task_master = None
         self.exitcode = 0
@@ -308,12 +314,22 @@ class Manager(ArgParseCmd):
         self._add_work_spec_name_args(parser)
         parser.add_argument('-n', '--limit', type=int, metavar='N',
                             help='only print N work units')
+        parser.add_argument('-s', '--status',
+                            choices=['available', 'pending', 'blocked',
+                                     'finished', 'failed'],
+                            help='print work units in STATUS')
         parser.add_argument('--details', action='store_true',
                             help='also print the contents of the work units')
     def do_work_units(self, args):
         '''list work units that have not yet completed'''
         work_spec_name = self._get_work_spec_name(args)
-        work_units = self.task_master.list_work_units(work_spec_name)
+        fns = { 'available': self.task_master.list_available_work_units,
+                'pending': self.task_master.list_pending_work_units,
+                'blocked': self.task_master.list_blocked_work_units,
+                'finished': self.task_master.list_finished_work_units,
+                'failed': self.task_master.list_failed_work_units }
+        fn = fns.get(args.status, self.task_master.list_work_units)
+        work_units = fn(work_spec_name)
         work_unit_names = sorted(work_units.keys())
         if args.limit: work_unit_names = work_unit_names[:args.limit]
         for k in work_unit_names:
@@ -329,7 +345,7 @@ class Manager(ArgParseCmd):
         parser.add_argument('--details', action='store_true',
                             help='also print the contents of the work units')
     def do_failed(self, args):
-        '''list failed work units'''
+        '''list failed work units (deprecated)'''
         work_spec_name = self._get_work_spec_name(args)
         work_units = self.task_master.list_failed_work_units(work_spec_name)
         work_unit_names = sorted(work_units.keys())
@@ -339,6 +355,51 @@ class Manager(ArgParseCmd):
                 self.stdout.write('{!r}: {!r}\n'.format(k, work_units[k]))
             else:
                 self.stdout.write('{}\n'.format(k))
+
+    def args_work_unit(self, parser):
+        self._add_work_spec_name_args(parser)
+        parser.add_argument('unit', nargs='*',
+                            help='work unit name(s)')
+    def do_work_unit(self, args):
+        '''print basic details about work units'''
+        work_spec_name = self._get_work_spec_name(args)
+        for work_unit_name in args.unit:
+            status = self.task_master.get_work_unit_status(work_spec_name,
+                                                           work_unit_name)
+            self.stdout.write('{} ({})\n'
+                              .format(work_unit_name, status['status']))
+            if 'expiration' in status:
+                when = time.ctime(status['expiration'])
+                if status == 'available':
+                    if status['expiration'] == 0:
+                        self.stdout.write('  Never scheduled\n')
+                    else:
+                        self.stdout.write('  Available since: {}\n'
+                                          .format(when))
+                else:
+                    self.stdout.write('  Expires: {}\n'.format(when))
+            if 'worker_id' in status:
+                heartbeat = self.task_master.get_heartbeat(status['worker_id'])
+                if heartbeat:
+                    hostname = (heartbeat.get('fqdn', None) or
+                                heartbeat.get('hostname', None) or
+                                '')
+                    ipaddrs = ', '.join(heartbeat.get('ipaddrs', ()))
+                    if hostname and ipaddrs:
+                        summary = '{} on {}'.format(hostname, ipaddrs)
+                    else:
+                        summary = hostname + ipaddrs
+                else:
+                    summary = 'No information'
+                self.stdout.write('  Worker: {} ({})\n'.format(
+                    status['worker_id'], summary))
+            if 'traceback' in status:
+                self.stdout.write('  Traceback:\n{}\n'.format(
+                    status['traceback']))
+            if 'depends_on' in status:
+                self.stdout.write('  Depends on:\n')
+                for what in status['depends_on']:
+                    self.stdout.write('    {!r}\n'.format(what))
 
     def args_retry(self, parser):
         self._add_work_spec_name_args(parser)

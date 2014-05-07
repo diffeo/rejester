@@ -47,32 +47,7 @@ class Registry(RedisBase):
     list.  This in effect provides two levels of dictionary, using the
     Redis key and the dictionary key.  The registry makes an effort to
     store all types of object as values, potentially serializing them
-    into JSON.  Core operations include
-
-    `update(key, {'k': 'v'})` adds items to a dictionary
-
-    `popmany(key, 'k1', 'k2')` removes values from a dictionary
-
-    `len(key)` returns the number of items in a dictionary
-
-    `getitem_reset(key)` returns the highest-priority item, leaving it
-    in the queue with a new priority
-
-    `popitem(key)` returns the highest-priority item, removing it
-
-    `popitem_move(key1, key2)` moves the highest-priority item from
-    `key1` to `key2`
-
-    `move(key1, key2, {'k': anything})` moves values between dictionaries
-
-    `move_all(key1, key2)` moves everything from one dictionary to another
-
-    `pull(key1)` gets the entire contents of a dictionary
-
-    `increment(key, 'k')` gets an increasing numeric value
-
-    `get(key, 'k')`, `set(key, 'k', 'v')`, `delete(key)` do what they
-    sound like
+    into JSON.
 
     '''
 
@@ -776,8 +751,23 @@ class Registry(RedisBase):
             raise EnvironmentError()
 
     def get(self, dict_name, key, default=None, include_priority=False):
-        '''
-        get value for key, if missing return default if provided
+        '''Get the value for a specific key in a specific dictionary.
+
+        If `include_priority` is false (default), returns the value
+        for that key, or `default` (defaults to :const:`None`) if it
+        is absent.  If `include_priority` is true, returns a pair of
+        the value and its priority, or of `default` and :const:`None`.
+
+        This does not use or enforce the session lock, and is read-only,
+        but inconsistent results are conceivably possible if the caller
+        does not hold the lock and `include_priority` is set.
+
+        :param str dict_name: name of dictionary to query
+        :param str key: key in dictionary to query
+        :param default: default value if `key` is absent
+        :param bool include_priority: include score in results
+        :return: value from dictionary, or pair of value and priority
+
         '''
         dict_name = self._namespace(dict_name)
         key = self._encode(key)

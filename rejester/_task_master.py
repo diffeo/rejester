@@ -853,6 +853,78 @@ class TaskMaster(object):
         with self.registry.lock(atime=1000) as session:
             return session.pull(WORK_UNITS_ + work_spec_name + _FAILED)
 
+    def get_work_unit_status(self, work_spec_name, work_unit_key):
+        '''Get a high-level status for some work unit.
+
+        The return value is a dictionary.  The only required key is
+        ``status``, which could be any of:
+
+        ``missing``
+          The work unit does not exist anywhere
+        ``available``
+          The work unit is available for new workers; additional
+          keys include ``expiration`` (may be 0)
+        ``pending``
+          The work unit is being worked on; additional keys include
+          ``expiration`` and ``worker_id`` (usually)
+        ``blocked``
+          The work unit is waiting for some other work units to finish;
+          additional keys include ``depends_on``
+        ``finished``
+          The work unit has completed
+        ``failed``
+          The work unit failed; additional keys include ``traceback``
+
+        :param str work_spec_name: name of the work spec
+        :param str work_unit_name: name of the work unit
+        :return: dictionary description of summary status
+        '''
+        with self.registry.lock(atime=1000) as session:
+            # In the available list?
+            (unit,priority) = session.get(WORK_UNITS_ + work_spec_name,
+                                          work_unit_key, include_priority=True)
+            if unit:
+                result = {}
+                if priority < time.time():
+                    result['status'] = 'available'
+                else:
+                    result['status'] = 'pending'
+                result['expiration'] = priority
+                # ...is anyone working on it?
+                worker = session.get(WORK_UNITS_ + work_spec_name + "_locks",
+                                     work_unit_key)
+                if worker:
+                    result['worker_id'] = worker
+                return result
+
+            # In the finished list?
+            unit = session.get(WORK_UNITS_ + work_spec_name + _FINISHED,
+                               work_unit_key)
+            if unit:
+                return { 'status': 'finished' }
+
+            # In the failed list?
+            unit = session.get(WORK_UNITS_ + work_spec_name + _FAILED,
+                               work_unit_key)
+            if unit:
+                result = { 'status': 'failed' }
+                if 'traceback' in unit:
+                    result['traceback'] = unit['traceback']
+                return result
+
+            # In the blocked list?
+            unit = session.get(WORK_UNITS_ + work_spec_name + _BLOCKED,
+                               work_unit_key)
+            if unit:
+                # This should always have *something*, right?
+                deps = session.get(WORK_UNITS_ + work_spec_name + _DEPENDS,
+                                   work_unit_key, default=[])
+                result = { 'status': 'blocked',
+                           'depends_on': deps }
+                return result
+
+        return { 'status': 'missing' }
+
     def inspect_work_unit(self, work_spec_name, work_unit_key):
         '''Get the data for some work unit.
 
@@ -1101,6 +1173,7 @@ class TaskMaster(object):
                          priority=0)
 
     def nice(self, work_spec_name, nice):        
+        '''Change the priority of an existing work spec.'''
         with self.registry.lock(atime=1000) as session:
             session.update(NICE_LEVELS, dict(work_spec_name=nice))
 
