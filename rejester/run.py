@@ -494,6 +494,7 @@ class Manager(ArgParseCmd):
         # Shut off all logging...it can cause problems
         logging.config.dictConfig({
             'version': 1,
+            'disable_existing_loggers': False
         })
         gconfig = yakonfig.get_global_config()
         yakonfig.clear_global_config()
