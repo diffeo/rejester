@@ -93,6 +93,19 @@ def test_list_work_units(task_master):
     for k in u.iterkeys(): assert k in work_units
     for k in work_units.iterkeys(): assert k == work_unit.key or k in u
 
+def test_list_work_units_start_limit(task_master):
+    work_units = dict(foo={ 'length': 3 }, bar={ 'length': 6 })
+    task_master.update_bundle(work_spec, work_units)
+
+    u = task_master.list_work_units(work_spec['name'], start=0, limit=1)
+    assert u == { 'bar': { 'length': 6 } }
+
+    u = task_master.list_work_units(work_spec['name'], start=1, limit=1)
+    assert u == { 'foo': { 'length': 3 } }
+
+    u = task_master.list_work_units(work_spec['name'], start=2, limit=1)
+    assert u == { }
+
 def test_task_master_reset_all(task_master):
     work_units = dict(foo={}, bar={})
     task_master.update_bundle(work_spec, work_units)

@@ -782,7 +782,7 @@ class TaskMaster(object):
         with self.registry.lock(atime=1000) as session:
             return session.get(WORK_SPECS, work_spec_name)
 
-    def list_work_units(self, work_spec_name):
+    def list_work_units(self, work_spec_name, start=0, limit=None):
         """Get a dictionary of work units for some work spec.
 
         The dictionary is from work unit name to work unit definiton.
@@ -790,10 +790,10 @@ class TaskMaster(object):
         "pending" work units) are included.
 
         """
-        with self.registry.lock(atime=1000) as session:
-            return session.pull(WORK_UNITS_ + work_spec_name)
+        return self.registry.filter(WORK_UNITS_ + work_spec_name,
+                                    start=start, limit=limit)
 
-    def list_available_work_units(self, work_spec_name):
+    def list_available_work_units(self, work_spec_name, start=0, limit=None):
         """Get a dictionary of available work units for some work spec.
 
         The dictionary is from work unit name to work unit definiton.
@@ -802,22 +802,22 @@ class TaskMaster(object):
         included.
 
         """
-        with self.registry.lock(atime=1000) as session:
-            return session.filter(WORK_UNITS_ + work_spec_name,
-                                  priority_max=time.time())
+        return self.registry.filter(WORK_UNITS_ + work_spec_name,
+                                    priority_max=time.time(),
+                                    start=start, limit=limit)
 
-    def list_pending_work_units(self, work_spec_name):
+    def list_pending_work_units(self, work_spec_name, start=0, limit=None):
         """Get a dictionary of in-progress work units for some work spec.
 
         The dictionary is from work unit name to work unit definiton.
         Units listed here should be worked on by some worker.
 
         """
-        with self.registry.lock(atime=1000) as session:
-            return session.filter(WORK_UNITS_ + work_spec_name,
-                                  priority_min=time.time())
+        return self.registry.filter(WORK_UNITS_ + work_spec_name,
+                                    priority_min=time.time(),
+                                    start=start, limit=limit)
 
-    def list_blocked_work_units(self, work_spec_name):
+    def list_blocked_work_units(self, work_spec_name, start=0, limit=None):
         """Get a dictionary of blocked work units for some work spec.
 
         The dictionary is from work unit name to work unit definiton.
@@ -829,10 +829,10 @@ class TaskMaster(object):
         they are.
 
         """
-        with self.registry.lock(atime=1000) as session:
-            return session.pull(WORK_UNITS_ + work_spec_name + _BLOCKED)
+        return self.registry.filter(WORK_UNITS_ + work_spec_name + _BLOCKED,
+                                    start=start, limit=limit)
 
-    def list_finished_work_units(self, work_spec_name):
+    def list_finished_work_units(self, work_spec_name, start=0, limit=None):
         """Get a dictionary of finished work units for some work spec.
 
         The dictionary is from work unit name to work unit definiton.
@@ -840,18 +840,18 @@ class TaskMaster(object):
         included.
 
         """
-        with self.registry.lock(atime=1000) as session:
-            return session.pull(WORK_UNITS_ + work_spec_name + _FINISHED)
+        return self.registry.filter(WORK_UNITS_ + work_spec_name + _FINISHED,
+                                    start=start, limit=limit)
 
-    def list_failed_work_units(self, work_spec_name):
+    def list_failed_work_units(self, work_spec_name, start=0, limit=None):
         """Get a dictionary of failed work units for some work spec.
 
         The dictionary is from work unit name to work unit definiton.
         Only work units that have completed unsuccessfully are included.
 
         """
-        with self.registry.lock(atime=1000) as session:
-            return session.pull(WORK_UNITS_ + work_spec_name + _FAILED)
+        return self.registry.filter(WORK_UNITS_ + work_spec_name + _FAILED,
+                                    start=start, limit=limit)
 
     def get_work_unit_status(self, work_spec_name, work_unit_key):
         '''Get a high-level status for some work unit.
@@ -1138,38 +1138,41 @@ class TaskMaster(object):
 
             return True
 
-    def retry(self, work_spec_name, work_unit_name):
-        '''Move a failed work unit back into the "pending" queue.
+    def retry(self, work_spec_name, *work_unit_names):
+        '''Move failed work unit(s) back into the "pending" queue.
 
         The work unit will be available to execute immediately.  If
         other tasks had depended on it, those dependencies will not
         be recreated.
 
         :param str work_spec_name: name of the (existing) work spec
-        :param str work_unit_name: name of the (failed) work unit
+        :param str work_unit_names: name(s) of the (failed) work unit(s)
         :raise rejester.NoSuchWorkSpecError: if `work_spec_name` is
           invalid
         :raise rejester.NoSuchWorkUnitError: if `work_spec_name` is
-          valid but `work_unit_name` is not a failed work unit
+          valid but any of the `work_unit_names` are not a failed work unit
         :raise rejester.LockError: if the registry lock could not be
           obtained
         
         '''
         with self.registry.lock(atime=1000) as session:
             # This sequence is safe even if this system dies
-            unit = session.get(WORK_UNITS_ + work_spec_name + _FAILED,
-                               work_unit_name)
-            if unit is None:
-                spec = session.get(WORK_SPECS, work_spec_name)
-                if spec is None:
-                    raise NoSuchWorkSpecError(work_spec_name)
-                else:
-                    raise NoSuchWorkUnitError(work_unit_name)
-            if 'traceback' in unit:
-                del unit['traceback']
+            units = {}
+            for work_unit_name in work_unit_names:
+                unit = session.get(WORK_UNITS_ + work_spec_name + _FAILED,
+                                   work_unit_name)
+                if unit is None:
+                    spec = session.get(WORK_SPECS, work_spec_name)
+                    if spec is None:
+                        raise NoSuchWorkSpecError(work_spec_name)
+                    else:
+                        raise NoSuchWorkUnitError(work_unit_name)
+                if 'traceback' in unit:
+                    del unit['traceback']
+                units[work_unit_name] = unit
             session.move(WORK_UNITS_ + work_spec_name + _FAILED,
                          WORK_UNITS_ + work_spec_name,
-                         { work_unit_name: unit },
+                         units,
                          priority=0)
 
     def nice(self, work_spec_name, nice):        

@@ -302,7 +302,7 @@ def test_retry_fail_one_name(manager, worker, task_master, loaded,
     assert task_master.num_available(work_spec['name']) == len(work_units)-1
 
     manager.runcmd('retry', ['-W', work_spec['name'], unit_name])
-    assert manager.stdout.getvalue() == ''
+    assert manager.stdout.getvalue() == 'Retried 1 work unit.\n'
     assert task_master.num_failed(work_spec['name']) == 0
     assert task_master.num_available(work_spec['name']) == len(work_units)
 
@@ -319,7 +319,7 @@ def test_retry_fail_one_all(manager, worker, task_master, loaded,
     assert task_master.num_available(work_spec['name']) == len(work_units)-1
 
     manager.runcmd('retry', ['-W', work_spec['name'], '-a'])
-    assert manager.stdout.getvalue() == ''
+    assert manager.stdout.getvalue() == 'Retried 1 work unit.\n'
     assert task_master.num_failed(work_spec['name']) == 0
     assert task_master.num_available(work_spec['name']) == len(work_units)
 

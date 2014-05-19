@@ -668,8 +668,19 @@ class Registry(RedisBase):
 
 
     def pull(self, dict_name):
-        '''
-        Pull entire dictionary
+        '''Get the entire contents of a single dictionary.
+
+        This operates without a session lock, but is still atomic.  In
+        particular this will run even if someone else holds a session
+        lock and you do not.
+
+        This is only suitable for "small" dictionaries; if you have
+        hundreds of thousands of items or more, consider
+        :meth:`filter` instead to get a subset of a dictionary.
+
+        :param str dict_name: name of the dictionary to retrieve
+        :return: corresponding Python dictionary
+
         '''
         dict_name = self._namespace(dict_name)
         conn = redis.Redis(connection_pool=self.pool)
@@ -679,16 +690,45 @@ class Registry(RedisBase):
                      for key, value in res.iteritems()}
         return split_res
 
-    def filter(self, dict_name, priority_min='-inf', priority_max='+inf'):
-        '''Pull all keys and values in dictionary between priority_min/max
+    def filter(self, dict_name, priority_min='-inf', priority_max='+inf',
+               start=0, limit=None):
+        '''Get a subset of a dictionary.
+
+        This retrieves only keys with priority scores greater than or
+        equal to `priority_min` and less than or equal to `priority_max`.
+        Of those keys, it skips the first `start` ones, and then returns
+        at most `limit` keys.
+
+        With default parameters, this retrieves the entire dictionary,
+        making it a more expensive version of :meth:`pull`.  This can
+        be used to limit the dictionary by priority score, for instance
+        using the score as a time stamp and only retrieving values
+        before or after a specific time; or it can be used to get
+        slices of the dictionary if there are too many items to use
+        :meth:`pull`.
+
+        This is a read-only operation and does not require a session
+        lock, but if this is run in a session context, the lock will
+        be honored.
+
+        :param str dict_name: name of the dictionary to retrieve
+        :param float priority_min: lowest score to retrieve
+        :param float priority_max: highest score to retrieve
+        :param int start: number of items to skip
+        :param int limit: number of items to retrieve
+        :return: corresponding (partial) Python dictionary
+        :raise rejester.LockError: if the session lock timed out
+
         '''
-        if self._lock_name is None:
-            raise ProgrammerError('must acquire lock first')
-        script = '''
-        if redis.call("get", KEYS[1]) == ARGV[1]
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
+        local lock_holder = redis.call("get", KEYS[1])
+        if (not lock_holder) or (lock_holder == ARGV[1])
         then
             -- find all the keys and priorities within range
-            local next_keys = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3])
+            local next_keys = redis.call("zrangebyscore", KEYS[3],
+                                         ARGV[2], ARGV[3],
+                                         "limit", ARGV[4], ARGV[5])
             
             if not next_keys[1] then
                 return {}
@@ -706,20 +746,15 @@ class Registry(RedisBase):
             -- ERROR: No longer own the lock
             return -1
         end
-        '''
-        conn = redis.Redis(connection_pool=self.pool)
-        res = conn.eval(script, 2, self._lock_name, 
-                        self._namespace(dict_name), 
-                        self._session_lock_identifier,
-                        priority_min, priority_max,
-        )
-        if None in res or res == -1:
-            raise KeyError(
-                'Registry.filter(%r, %r, %r) --> %r' 
-                % (dict_name, priority_min, priority_max, res))
-
-        logger.debug('Registry.filter(%r, %r, %r) --> %r', 
-                     dict_name, priority_min, priority_max, res)
+        ''')
+        if limit is None: limit = -1
+        res = script(keys=[self._lock_name,
+                           self._namespace(dict_name),
+                           self._namespace(dict_name) + 'keys'],
+                     args=[self._session_lock_identifier,
+                           priority_min, priority_max, start, limit])
+        if res == -1:
+            raise LockError()
         split_res = {self._decode(res[i]):
                      self._decode(res[i+1])
                      for i in xrange(0, len(res)-1, 2)}

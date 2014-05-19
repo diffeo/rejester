@@ -19,6 +19,10 @@ class LockError(RejesterException):
 
 class NoSuchWorkSpecError(RejesterException):
     """A `TaskMaster` function was called with a nonexistent work spec"""
+    def __init__(self, work_spec_name, *args, **kwargs):
+        super(NoSuchWorkSpecError, self).__init__(*args, **kwargs)
+        #: Name of the nonexistent work spec
+        self.work_spec_name = work_spec_name
     pass
 
 class NoSuchWorkUnitError(RejesterException):
@@ -29,6 +33,10 @@ class NoSuchWorkUnitError(RejesterException):
     but an invalid work unit name.
 
     '''
+    def __init__(self, work_unit_name, *args, **kwargs):
+        super(NoSuchWorkUnitError, self).__init__(*args, **kwargs)
+        #: Name of the nonexistent work unit
+        self.work_unit_name = work_unit_name
     pass
 
 class ProgrammerError(RejesterException):

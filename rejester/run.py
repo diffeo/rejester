@@ -329,7 +329,7 @@ class Manager(ArgParseCmd):
                 'finished': self.task_master.list_finished_work_units,
                 'failed': self.task_master.list_failed_work_units }
         fn = fns.get(args.status, self.task_master.list_work_units)
-        work_units = fn(work_spec_name)
+        work_units = fn(work_spec_name, limit=args.limit)
         work_unit_names = sorted(work_units.keys())
         if args.limit: work_unit_names = work_unit_names[:args.limit]
         for k in work_unit_names:
@@ -346,15 +346,8 @@ class Manager(ArgParseCmd):
                             help='also print the contents of the work units')
     def do_failed(self, args):
         '''list failed work units (deprecated)'''
-        work_spec_name = self._get_work_spec_name(args)
-        work_units = self.task_master.list_failed_work_units(work_spec_name)
-        work_unit_names = sorted(work_units.keys())
-        if args.limit: work_unit_names = work_unit_names[:args.limit]
-        for k in work_unit_names:
-            if args.details:
-                self.stdout.write('{!r}: {!r}\n'.format(k, work_units[k]))
-            else:
-                self.stdout.write('{}\n'.format(k))
+        args.status = 'failed'
+        return self.do_work_units(args)
 
     def args_work_unit(self, parser):
         self._add_work_spec_name_args(parser)
@@ -410,31 +403,46 @@ class Manager(ArgParseCmd):
     def do_retry(self, args):
         '''retry a specific failed job'''
         work_spec_name = self._get_work_spec_name(args)
-        if args.all:
-            try:
-                units = self.task_master.list_failed_work_units(work_spec_name)
-            # NB: rejester never actually raises this exception, we get
-            # an empty "units" list instead
-            except NoSuchWorkSpecError, e:
-                self.stdout.write('Invalid work spec {!r}.\n'
-                                  .format(work_spec_name))
-                return
-        else:
-            units = args.unit
-        if not units:
-            self.stdout.write('Nothing to do.\n')
+        retried = 0
+        complained = False
+        try:
+            if args.all:
+                while True:
+                    units = self.task_master.list_failed_work_units(
+                        work_spec_name, limit=1000)
+                    if not units: break
+                    try:
+                        self.task_master.retry(work_spec_name, *units)
+                        retried += len(units)
+                    except NoSuchWorkUnitError, e:
+                        # Because of this sequence, this probably means
+                        # something else retried the work unit.  If we
+                        # try again, we shouldn't see it in the failed
+                        # list...so whatever
+                        pass
+            else:
+                units = args.unit
+                try:
+                    self.task_master.retry(work_spec_name, *units)
+                    retried += len(units)
+                except NoSuchWorkUnitError, e:
+                    unit = e.work_unit_name
+                    self.stdout.write('No such failed work unit {!r}.\n'
+                                      .format(unit))
+                    complained = True
+                    units.remove(unit)
+                    # and try again
+        except NoSuchWorkSpecError, e:
+            # NB: you are not guaranteed to get this, especially with --all
+            self.stdout.write('Invalid work spec {!r}.\n'
+                              .format(work_spec_name))
             return
-        for unit in units:
-            try:
-                self.task_master.retry(work_spec_name, unit)
-            except NoSuchWorkSpecError, e:
-                self.stdout.write('Invalid work spec {!r}.\n'
-                                  .format(work_spec_name))
-                return
-            except NoSuchWorkUnitError, e:
-                self.stdout.write('No such failed work unit {!r}.\n'
-                                  .format(unit))
-                # and continue to the next unit
+        if retried == 0 and not complained:
+            self.stdout.write('Nothing to do.\n')
+        elif retried == 1:
+            self.stdout.write('Retried {} work unit.\n'.format(retried))
+        elif retried > 1:
+            self.stdout.write('Retried {} work units.\n'.format(retried))
 
     def args_mode(self, parser):
         parser.add_argument('mode', choices=['idle', 'run', 'terminate'],
