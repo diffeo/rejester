@@ -68,8 +68,8 @@ class RedisBase(object):
         '''
         conn = redis.Redis(connection_pool=self.pool)
         keys = conn.keys("%s*" % self._namespace_str)
-        if keys:
-            conn.delete(*keys)
+        for i in xrange(0, len(keys), 10000):
+            conn.delete(*keys[i:i+10000])
         logger.debug('tearing down %r', self._namespace_str)
 
     def _namespace(self, name):
