@@ -216,6 +216,16 @@ def test_status_with_work(manager, loaded, work_spec, work_units, worker):
     }
     assert status == ref
 
+def test_summary(manager, loaded, work_spec):
+    manager.runcmd('summary', [])
+    assert (manager.stdout.getvalue() ==
+            'Work spec               Avail  Pending  Blocked'
+            '   Failed Finished    Total\n'
+            '==================== ======== ======== ========'
+            ' ======== ======== ========\n'
+            'tbundle                    11        0        0'
+            '        0        0       11\n')
+
 def test_work_units_names(manager, loaded, work_spec, work_units):
     manager.runcmd('work_units', ['-W', work_spec['name']])
     response = manager.stdout.getvalue()

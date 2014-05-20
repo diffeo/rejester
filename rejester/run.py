@@ -310,6 +310,21 @@ class Manager(ArgParseCmd):
         status = self.task_master.status(work_spec_name)
         self.stdout.write(json.dumps(status, indent=4, sort_keys=True) + '\n')
 
+    def args_summary(self, parser):
+        pass
+    def do_summary(self, args):
+        '''print a summary of running rejester work'''
+        self.stdout.write('Work spec               Avail  Pending  Blocked'
+                          '   Failed Finished    Total\n')
+        self.stdout.write('==================== ======== ======== ========'
+                          ' ======== ======== ========\n')
+        for name in sorted(self.task_master.list_work_specs().keys()):
+            status = self.task_master.status(name)
+            self.stdout.write('{0:20s} {1[num_available]:8d} '
+                              '{1[num_pending]:8d} {1[num_blocked]:8d} '
+                              '{1[num_failed]:8d} {1[num_finished]:8d} '
+                              '{1[num_tasks]:8d}\n'.format(name, status))
+
     def args_work_units(self, parser):
         self._add_work_spec_name_args(parser)
         parser.add_argument('-n', '--limit', type=int, metavar='N',
