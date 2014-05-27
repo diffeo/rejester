@@ -60,6 +60,11 @@ If no further options are given, start an interactive shell to monitor
 and control :mod:`rejester`.  Alternatively, a single command can be
 given on the command line.  The tool provides the following commands:
 
+.. describe:: summary
+
+    Print a tabular listing of all of the running work specs and
+    how many work units are in each state.
+
 .. describe:: load --work-spec file.yaml --work-units file2.json
 
     Loads a set of work units.  The work spec (``-w``) and work units
@@ -75,6 +80,10 @@ given on the command line.  The tool provides the following commands:
     Deletes the entire namespace.  Prompts for confirmation, unless
     ``-y`` or ``--yes`` is given as an argument.
 
+.. describe:: work_specs
+
+    Prints out the names of all of the work specs.
+
 .. describe:: work_spec --work-spec-name name
 
     Prints out the definition of a work spec, assuming it has already
@@ -88,24 +97,44 @@ given on the command line.  The tool provides the following commands:
     Prints out a summary of the jobs in some work spec.  Provide the
     work spec name the same way as for the ``work_spec`` command.
 
-.. describe:: work_units --work-spec-name name
+.. describe:: work_units --work-spec-name name [--status status]
 
     Prints out a listing of the work units that have not yet completed
     for some work spec.  Provide the work spec name the same way as
     for the ``work_spec`` command.  This includes the work units that
     the ``status`` command would report as "available" or "pending",
-    but not other statuses.  If ``--details`` is given as an argument,
-    print the definition of the work unit along with its name.
+    but not other statuses.  If ``-s`` or ``--status`` is given with
+    one of the status strings "available", "pending", "blocked",
+    "failed", or "finished", only print work units with that status.
+    If ``--details`` is given as an argument, print the definition of
+    the work unit (and the traceback for failed work units) along with
+    its name.
 
 .. describe:: failed --work-spec-name name
 
-    The same as ``work_units``, but only prints out "failed" work
-    units.  ``failed -W name --details`` should include a traceback
-    indicating why the work unit failed.
+    Identical to ``work_units --status failed``.  May be removed at
+    a future time.
 
 .. describe:: work_unit --work-spec-name name unitname
 
     Prints out basic details for a work unit, in any state.
+
+.. describe:: retry --work-spec-name name [--all|unitname...]
+
+    Retry failed work units, removing their traceback and moving them
+    back to "available" status.  If ``-a`` or ``--all`` is given,
+    retry all failed work units; otherwise, only retry the specific
+    work units named on the command line.
+
+.. describe:: clear --work-spec-name name [--status status] [unitname...]
+
+    Remove work units from the system.  With no additional arguments,
+    remove all work units from the specified work spec.  If ``-s`` or
+    ``--status`` is given, remove only work units with this status;
+    see the description of the `work_units` subcommand for possible
+    values.  If any ``unitname`` values are given, only remove those
+    specific work units, provided they in fact have the specified
+    status.
 
 .. describe:: mode [idle|run|terminate]
 
@@ -458,6 +487,38 @@ class Manager(ArgParseCmd):
             self.stdout.write('Retried {} work unit.\n'.format(retried))
         elif retried > 1:
             self.stdout.write('Retried {} work units.\n'.format(retried))
+
+    def args_clear(self, parser):
+        self._add_work_spec_name_args(parser)
+        parser.add_argument('-s', '--status',
+                            choices=['available', 'pending', 'blocked',
+                                     'finished', 'failed'],
+                            help='print work units in STATUS')
+        parser.add_argument('unit', nargs='*',
+                            help='work unit name(s) to remove')
+    def do_clear(self, args):
+        '''remove work units from a work spec'''
+        # Which units?
+        work_spec_name = self._get_work_spec_name(args)
+        units = args.unit or None
+        # What to do?
+        count = 0
+        if args.status == 'available' or args.status is None:
+            count += self.task_master.remove_available_work_units(
+                work_spec_name, units)
+        if args.status == 'pending' or args.status is None:
+            count += self.task_master.remove_pending_work_units(
+                work_spec_name, units)
+        if args.status == 'blocked' or args.status is None:
+            count += self.task_master.remove_blocked_work_units(
+                work_spec_name, units)
+        if args.status == 'finished' or args.status is None:
+            count += self.task_master.remove_finished_work_units(
+                work_spec_name, units)
+        if args.status == 'failed' or args.status is None:
+            count += self.task_master.remove_failed_work_units(
+                work_spec_name, units)
+        self.stdout.write('Removed {} work units.\n'.format(count))
 
     def args_mode(self, parser):
         parser.add_argument('mode', choices=['idle', 'run', 'terminate'],

@@ -33,14 +33,19 @@ class Registry(RedisBase):
     including atomic operations for moving (key, value) pairs between
     dictionaries, and incrementing counts.
 
-    Most operations on the registry require getting a lock via
+    Many operations on the registry require getting a lock via
     the database, for instance
 
     >>> with registry.lock() as session:
     ...   value = session.get(k1, k2)
 
     The lock mechanism ensures that no two Registry objects do work
-    concurrently, even running on separate systems.
+    concurrently, even running on separate systems.  Specific method
+    descriptions will note if they can run without a lock.  In general,
+    read-only operations will always run successfully without a lock
+    but will check for the correct lock if one is given; read-write
+    operations will run without a lock only if no other worker holds
+    one either.
 
     The basic data object is a string-keyed dictionary stored under
     some key.  The dictionary keys are also stored in a prioritized
@@ -64,7 +69,6 @@ class Registry(RedisBase):
         super(Registry, self).__init__(config)
 
         ## populated only when lock is acquired
-        self._lock_name = None
         self._session_lock_identifier = None
 
         self._startup()
@@ -107,50 +111,63 @@ class Registry(RedisBase):
         conn = redis.Redis(connection_pool=self.pool)
         return conn.smembers(self._namespace('cur_workers'))
 
-    def _acquire_lock(self, lock_name, identifier, atime=600, ltime=600):
+    @property
+    def _lock_name(self):
+        '''Name of the key for the global lock.'''
+        return self._namespace('global_registry_lock')
+
+    def _acquire_lock(self, identifier, atime=600, ltime=600):
         '''Acquire a lock for a given identifier.  Contend for the lock for
         atime, and hold the lock for ltime.
         '''
         conn = redis.Redis(connection_pool=self.pool)
         end = time.time() + atime
         while end > time.time():
-            if conn.set(lock_name, identifier, ex=ltime, nx=True):
-                logger.debug("won lock %s" % lock_name)
+            if conn.set(self._lock_name, identifier, ex=ltime, nx=True):
+                # logger.debug("won lock %s" % self._lock_name)
                 return identifier
             sleep_time = random.uniform(0, 3)
             time.sleep(sleep_time)
 
-        logger.warn('failed to acquire lock %s for %f seconds', lock_name, atime)
+        logger.warn('failed to acquire lock %s for %f seconds',
+                    self._lock_name, atime)
         return False
 
 
     def re_acquire_lock(self, ltime=600):
         '''Re-acquire the lock'''
         conn = redis.Redis(connection_pool=self.pool)
-        if conn.set(self._lock_name, self._session_lock_identifier, ex=ltime, xx=True):
-            logger.debug('re-acquired lock %s', self._lock_name)
+        if conn.set(self._lock_name, self._session_lock_identifier,
+                    ex=ltime, xx=True):
+            # logger.debug('re-acquired lock %s', self._lock_name)
             return self._session_lock_identifier
 
         raise EnvironmentError('failed to re-acquire lock')
 
 
-    def _release_lock(self, lock_name, identifier):
-        '''This follows a 'test and delete' pattern.  See redis documentation
-        http://redis.io/commands/set
+    def _release_lock(self, identifier):
+        '''Release the lock.
 
-        This is needed because the lock could have expired before we
-        deleted it.  We can only delete the lock if we still own it.
+        Checks that you do actually hold the lock, and raises
+        :exc:`rejester.exceptions.EnvironmentError` if you don't.
+
+        .. todo:: Most other functions that do this check raise
+                  :exc:`rejester.exceptions.LockError` instead,
+                  and this will probably be migrated to use that
+                  eventually.
+
         '''
-        script = '''
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             return redis.call("del", KEYS[1])
         else
             return -1
         end
-        '''
-        conn = redis.Redis(connection_pool=self.pool)
-        num_keys_deleted = conn.eval(script, 1, lock_name, identifier)
+        ''')
+        num_keys_deleted = script(keys=[self._lock_name],
+                                  args=[identifier])
         if num_keys_deleted == -1:
             ## registry_lock no long owned by this process
             raise EnvironmentError(
@@ -158,24 +175,26 @@ class Registry(RedisBase):
         return True
 
     @contextlib.contextmanager
-    def lock(self, lock_name='global_registry_lock', atime=600, ltime=600):
-        '''
-        A context manager wrapper around acquring a lock
-        '''
-        ## Prepend namespace to lock_name
-        lock_name = self._namespace(lock_name)
+    def lock(self, atime=600, ltime=600):
+        '''Context manager to acquire the namespace global lock.
 
+        This is typically used for multi-step registry operations,
+        such as a read-modify-write sequence::
+
+            with registry.lock() as session:
+                d = session.get('dict', 'key')
+                del d['traceback']
+                session.set('dict', 'key', d)
+
+        '''
         identifier = str(uuid.uuid4())
-        if self._acquire_lock(lock_name, identifier, atime,
-                              ltime) != identifier:
+        if self._acquire_lock(identifier, atime, ltime) != identifier:
             raise LockError("could not acquire lock")
         try:
-            self._lock_name = lock_name
             self._session_lock_identifier = identifier
             yield self
         finally:
-            self._release_lock(lock_name, identifier)
-            self._lock_name = None
+            self._release_lock(identifier)
             self._session_lock_identifier = None
 
     def _encode(self, data):
@@ -258,7 +277,7 @@ class Registry(RedisBase):
           If the locks parameter is None, then no lock checking is
           performed.
         '''
-        if self._lock_name is None:
+        if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
         ## script is evaluated with numkeys=2, so KEYS[1] is lock_name,
         ## KEYS[2] is dict_name, ARGV[1] is identifier, and ARGV[i>=2]
@@ -327,7 +346,7 @@ class Registry(RedisBase):
 
         :type priority: float or int
         '''
-        if self._lock_name is None:
+        if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
         ## see comment above for script in update
         script = '''
@@ -353,38 +372,51 @@ class Registry(RedisBase):
 
 
     def popmany(self, dict_name, *keys):
-        '''
-        map(D.pop, keys), remove specified keys
-        If key is not found, do nothing
+        '''Remove one or more keys from a dictionary.
 
-        :returns None:
+        If any of the `keys` are not present, they are silently ignored.
+        
+        The actual deletion operation is atomic and does not require a
+        session lock, but nothing stops another operation from creating
+        the deleted keys immediately afterwards.  You may call this with
+        or without a session lock, but the operation will fail if some
+        other worker holds one.
+
+        :param str dict_name: name of dictionary to modify
+        :param str keys: names of keys to remove
+        :returns: number of keys removed
+        :raises rejester.exceptions.LockError: if the session lock timed
+          out, or if this was called without a session lock and some other
+          worker holds one
         '''
-        if self._lock_name is None:
-            raise ProgrammerError('must acquire lock first')
-        ## see comment above for script in update
-        script = '''
-        if redis.call("get", KEYS[1]) == ARGV[1]
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
+        local lock_holder = redis.call("get", KEYS[1])
+        if lock_holder == ARGV[1]
         then
+            local count = 0
             for i = 2, #ARGV do
-                redis.call("hdel", KEYS[2], ARGV[i])
-                redis.call("zrem", KEYS[2] .. "keys", ARGV[i])
+                if (redis.call("hexists", KEYS[2], ARGV[i]) == 1)
+                then
+                    count = count + 1
+                    redis.call("hdel", KEYS[2], ARGV[i])
+                    redis.call("zrem", KEYS[3], ARGV[i])
+                end
             end
-            return 1
+            return count
         else
             -- ERROR: No longer own the lock
-            return 0
+            return -1
         end
-        '''
-        dict_name = self._namespace(dict_name)
-        conn = redis.Redis(connection_pool=self.pool)
-        encoded_keys = [self._encode(key) for key in keys]
-        res = conn.eval(script, 2, self._lock_name, dict_name,
-                        self._session_lock_identifier, *encoded_keys)        
-        if len(keys) > 0 and res == 0:
-            # We either lost the lock or something else went wrong
-            raise EnvironmentError(
-                'Unable to remove items from %s in registry: %r' 
-                % (dict_name, res))
+        ''')
+        res = script(keys=[self._lock_name,
+                           self._namespace(dict_name),
+                           self._namespace(dict_name) + "keys"],
+                     args=([self._session_lock_identifier] +
+                           [self._encode(key) for key in keys]))
+        if res < 0:
+            raise LockError()
+        return res
 
     def len(self, dict_name, priority_min='-inf', priority_max='+inf'):
         '''returns number of items in dict_name within
@@ -405,7 +437,7 @@ class Registry(RedisBase):
 
         (key, value) stays in the dictionary and is assigned new_priority
         '''
-        if self._lock_name is None:
+        if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
         ## see comment above for script in update
         script = '''
@@ -459,7 +491,7 @@ class Registry(RedisBase):
         D.popitem() -> (k, v), remove and return some (key, value) pair as a
         2-tuple; but raise KeyError if D is empty.
         '''
-        if self._lock_name is None:
+        if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
         ## see comment above for script in update
         script = '''
@@ -484,8 +516,6 @@ class Registry(RedisBase):
         '''
         dict_name = self._namespace(dict_name)
         conn = redis.Redis(connection_pool=self.pool)
-        logger.critical('popitem: %s %s %s' 
-                        % (self._lock_name, self._session_lock_identifier, dict_name))
         key_value = conn.eval(script, 2, self._lock_name, dict_name, 
                               self._session_lock_identifier,
                               priority_min, priority_max,
@@ -503,7 +533,7 @@ class Registry(RedisBase):
         '''
         Pop an item out of from_dict, store it in to_dict, and return it
         '''
-        if self._lock_name is None:
+        if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
         script = '''
         if redis.call("get", KEYS[1]) == ARGV[1]
@@ -632,7 +662,7 @@ class Registry(RedisBase):
         '''
         move all items out of from_dict and update them in to_dict
         '''
-        if self._lock_name is None:
+        if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
         script = '''
         if redis.call("get", KEYS[1]) == ARGV[1]
@@ -763,7 +793,7 @@ class Registry(RedisBase):
     def set_1to1(self, dict_name, key1, key2):
         '''set two keys to be equal in a 1-to-1 mapping.
         '''
-        if self._lock_name is None:
+        if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
         script = '''
         if redis.call("get", KEYS[1]) == ARGV[1]
@@ -828,12 +858,32 @@ class Registry(RedisBase):
         self.update(dict_name, {key: value}, priorities=priorities)
 
     def delete(self, dict_name):
+        '''Delete an entire dictionary.
+
+        This operation on its own is atomic and does not require a
+        session lock, but a session lock is honored.
+
+        :param str dict_name: name of the dictionary to delete
+        :raises rejester.exceptions.LockError: if called with a session
+          lock, but the system does not currently have that lock; or if
+          called without a session lock but something else holds it
         '''
-        delete the entire hash named dict_name
-        '''
-        dict_name = self._namespace(dict_name)
         conn = redis.Redis(connection_pool=self.pool)
-        conn.delete(dict_name, dict_name + 'keys')
+        script = conn.register_script('''
+        if redis.call("get", KEYS[1]) == ARGV[1]
+        then
+            redis.call("del", KEYS[2], KEYS[3])
+            return 0
+        else
+            return -1
+        end
+        ''')
+        res = script(keys=[self._lock_name,
+                           self._namespace(dict_name),
+                           self._namespace(dict_name) + 'keys'],
+                     args=[self._session_lock_identifier])
+        if res == -1:
+            raise LockError()
 
     def direct_call(self, *args):
         '''execute a direct redis call against this Registry instances

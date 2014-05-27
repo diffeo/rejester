@@ -853,6 +853,162 @@ class TaskMaster(object):
         return self.registry.filter(WORK_UNITS_ + work_spec_name + _FAILED,
                                     start=start, limit=limit)
 
+    def remove_available_work_units(self, work_spec_name, work_unit_names):
+        '''Remove some work units in the available queue.
+
+        If `work_unit_names` is :const:`None` (which must be passed
+        explicitly), all available work units in `work_spec_name` are
+        removed; otherwise only the specific named work units will be.
+
+        :param str work_spec_name: name of the work spec
+        :param list work_unit_names: names of the work units, or
+          :const:`None` for all in `work_spec_name`
+        :return: number of work units removed
+
+        '''
+        with self.registry.lock() as session:
+            now = time.time()
+            if work_unit_names is None:
+                count = 0
+                while True:
+                    names = session.filter(WORK_UNITS_ + work_spec_name,
+                                           priority_max=now, limit=1000)
+                    if not names: break
+                    count += session.popmany(WORK_UNITS_ + work_spec_name,
+                                             *names)
+            else:
+                # TODO: this will remove "pending" units too, but the
+                # check for it is a little annoying
+                count = session.popmany(WORK_UNITS_ + work_spec_name,
+                                        *work_unit_names)
+            return count
+
+    def remove_pending_work_units(self, work_spec_name, work_unit_names):
+        '''Remove some work units in the pending list.
+
+        If `work_unit_names` is :const:`None` (which must be passed
+        explicitly), all pending work units in `work_spec_name` are
+        removed; otherwise only the specific named work units will be.
+
+        Note that this function has the potential to confuse workers
+        if they are actually working on the work units in question.  If
+        you have ensured that the workers are dead and you would be
+        otherwise waiting for the leases to expire before calling
+        :meth:`remove_available_work_units`, then this is a useful
+        shortcut.
+
+        :param str work_spec_name: name of the work spec
+        :param list work_unit_names: names of the work units, or
+          :const:`None` for all in `work_spec_name`
+        :return: number of work units removed
+
+        '''
+        with self.registry.lock() as session:
+            now = time.time()
+            if work_unit_names is None:
+                count = 0
+                while True:
+                    names = session.filter(WORK_UNITS_ + work_spec_name,
+                                           priority_min=now, limit=1000)
+                    if not names: break
+                    count += session.popmany(WORK_UNITS_ + work_spec_name,
+                                             *names)
+            else:
+                # TODO: this will remove "available" units too, but the
+                # check for it is a little annoying
+                count = session.popmany(WORK_UNITS_ + work_spec_name,
+                                        *work_unit_names)
+            return count
+
+    def remove_blocked_work_units(self, work_spec_name, work_unit_names):
+        '''Remove some work units in the blocked list.
+
+        If `work_unit_names` is :const:`None` (which must be passed
+        explicitly), all pending work units in `work_spec_name` are
+        removed; otherwise only the specific named work units will be.
+
+        Note that none of the "remove" functions will restart blocked
+        work units, so if you have called
+        e.g. :meth:`remove_available_work_units` for a predecessor
+        job, you may need to also call this method for its successor.
+
+        :param str work_spec_name: name of the work spec
+        :param list work_unit_names: names of the work units, or
+          :const:`None` for all in `work_spec_name`
+        :return: number of work units removed
+
+        '''
+        with self.registry.lock() as session:
+            if work_unit_names is None:
+                count = 0
+                while True:
+                    names = session.filter(
+                        WORK_UNITS_ + work_spec_name + _BLOCKED, limit=1000)
+                    if not names: break
+                    count += session.popmany(
+                        WORK_UNITS_ + work_spec_name + _BLOCKED, *names)
+            else:
+                count = session.popmany(
+                    WORK_UNITS_ + work_spec_name + _BLOCKED, *work_unit_names)
+            return count
+
+    def remove_failed_work_units(self, work_spec_name, work_unit_names):
+        '''Remove some failed work units.
+
+        If `work_unit_names` is :const:`None` (which must be passed
+        explicitly), all failed work units in `work_spec_name` are
+        removed; otherwise only the specific named work units will be.
+
+        Also consider :meth:`retry` to move failed work units back into
+        the available queue.
+
+        :param str work_spec_name: name of the work spec
+        :param list work_unit_names: names of the work units, or
+          :const:`None` for all in `work_spec_name`
+        :return: number of work units removed
+
+        '''
+        with self.registry.lock() as session:
+            if work_unit_names is None:
+                count = 0
+                while True:
+                    names = session.filter(
+                        WORK_UNITS_ + work_spec_name + _FAILED, limit=1000)
+                    if not names: break
+                    count += session.popmany(
+                        WORK_UNITS_ + work_spec_name + _FAILED, *names)
+            else:
+                count = session.popmany(
+                    WORK_UNITS_ + work_spec_name + _FAILED, *work_unit_names)
+            return count
+
+    def remove_finished_work_units(self, work_spec_name, work_unit_names):
+        '''Remove some finished work units.
+
+        If `work_unit_names` is :const:`None` (which must be passed
+        explicitly), all finished work units in `work_spec_name` are
+        removed; otherwise only the specific named work units will be.
+
+        :param str work_spec_name: name of the work spec
+        :param list work_unit_names: names of the work units, or
+          :const:`None` for all in `work_spec_name`
+        :return: number of work units removed
+
+        '''
+        with self.registry.lock() as session:
+            if work_unit_names is None:
+                count = 0
+                while True:
+                    names = session.filter(
+                        WORK_UNITS_ + work_spec_name + _FINISHED, limit=1000)
+                    if not names: break
+                    count += session.popmany(
+                        WORK_UNITS_ + work_spec_name + _FINISHED, *names)
+            else:
+                count = session.popmany(
+                    WORK_UNITS_ + work_spec_name + _FINISHED, *work_unit_names)
+            return count
+
     def get_work_unit_status(self, work_spec_name, work_unit_key):
         '''Get a high-level status for some work unit.
 

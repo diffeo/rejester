@@ -90,6 +90,17 @@ def work_units_path(work_units, tmpdir):
 def loaded(task_master, work_spec, work_units):
     task_master.update_bundle(work_spec, work_units)
 
+@pytest.fixture
+def worked(task_master, worker, loaded):
+    '''3 finished, 2 failed, 1 pending, rest available'''
+    for n in xrange(3):
+        unit = task_master.get_work(worker.worker_id, available_gb=16)
+        unit.finish()
+    for n in xrange(2):
+        unit = task_master.get_work(worker.worker_id, available_gb=16)
+        unit.fail()
+    task_master.get_work(worker.worker_id, available_gb=16)
+
 def test_load_args(manager, work_spec_path, work_units_path):
     '''various tests for invalid arguments to "load"'''
     with pytest.raises(SystemExit):
@@ -195,15 +206,7 @@ def test_status_not_loaded(manager, work_spec):
     }
     assert status == ref
 
-def test_status_with_work(manager, loaded, work_spec, work_units, worker):
-    for n in xrange(3):
-        unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
-        unit.finish()
-    for n in xrange(2):
-        unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
-        unit.fail()
-    unit = manager.task_master.get_work(worker.worker_id, available_gb=16)
-    
+def test_status_with_work(manager, worked, work_spec, work_units):
     manager.runcmd('status', ['-W', work_spec['name']])
     status = json.loads(manager.stdout.getvalue())
     ref = {
@@ -225,6 +228,16 @@ def test_summary(manager, loaded, work_spec):
             ' ======== ======== ========\n'
             'tbundle                    11        0        0'
             '        0        0       11\n')
+
+def test_summary_worked(manager, worked, work_spec):
+    manager.runcmd('summary', [])
+    assert (manager.stdout.getvalue() ==
+            'Work spec               Avail  Pending  Blocked'
+            '   Failed Finished    Total\n'
+            '==================== ======== ======== ========'
+            ' ======== ======== ========\n'
+            'tbundle                     5        1        0'
+            '        2        3       11\n')
 
 def test_work_units_names(manager, loaded, work_spec, work_units):
     manager.runcmd('work_units', ['-W', work_spec['name']])
@@ -332,6 +345,185 @@ def test_retry_fail_one_all(manager, worker, task_master, loaded,
     assert manager.stdout.getvalue() == 'Retried 1 work unit.\n'
     assert task_master.num_failed(work_spec['name']) == 0
     assert task_master.num_available(work_spec['name']) == len(work_units)
+
+def test_clear_simple(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    manager.runcmd('clear', ['-W', work_spec['name']])
+    assert manager.task_master.num_available(work_spec['name']) == 0
+    assert (manager.stdout.getvalue() ==
+            'Removed {} work units.\n'.format(len(work_units)))
+    
+def test_clear_available(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'available'])
+    assert manager.task_master.num_available(work_spec['name']) == 0
+    assert (manager.stdout.getvalue() ==
+            'Removed {} work units.\n'.format(len(work_units)))
+
+def test_clear_pending(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'pending'])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')
+    
+def test_clear_blocked(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'blocked'])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')
+    
+def test_clear_failed(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'failed'])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')
+
+def test_clear_finished(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'finished'])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')    
+
+def test_clear_by_name(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    a_key = work_units.keys()[0]
+    manager.runcmd('clear', ['-W', work_spec['name'], a_key])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units) - 1)
+    assert (manager.stdout.getvalue() == 'Removed 1 work units.\n')
+    
+def test_clear_available_by_name(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    a_key = work_units.keys()[0]
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'available', a_key])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units) - 1)
+    assert (manager.stdout.getvalue() == 'Removed 1 work units.\n')
+    
+@pytest.mark.xfail
+def test_clear_pending_by_name(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    a_key = work_units.keys()[0]
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'pending', a_key])
+    ### "clear -W foo -s pending bar" is known to delete an available unit
+    ### named "bar"
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')
+    
+def test_clear_blocked_by_name(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    a_key = work_units.keys()[0]
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'blocked', a_key])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')
+    
+def test_clear_failed_by_name(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    a_key = work_units.keys()[0]
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'failed', a_key])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')
+    
+def test_clear_finished_by_name(manager, loaded, work_spec, work_units):
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    a_key = work_units.keys()[0]
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'finished', a_key])
+    assert (manager.task_master.num_available(work_spec['name']) ==
+            len(work_units))
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')    
+
+def test_clean_with_work(manager, worked, work_spec, work_units):
+    manager.runcmd('clear', ['-W', work_spec['name']])
+    assert (manager.stdout.getvalue() ==
+            'Removed {} work units.\n'.format(len(work_units)))
+    assert manager.task_master.status(work_spec['name']) == {
+        'num_available': 0,
+        'num_pending': 0,
+        'num_blocked': 0,
+        'num_failed': 0,
+        'num_finished': 0,
+        'num_tasks': 0,
+    }
+
+def test_clean_available_with_work(manager, worked, work_spec, work_units):
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'available'])
+    assert (manager.stdout.getvalue() ==
+            'Removed {} work units.\n'.format(len(work_units) - 6))
+    assert manager.task_master.status(work_spec['name']) == {
+        'num_available': 0,
+        'num_pending': 1,
+        'num_blocked': 0,
+        'num_failed': 2,
+        'num_finished': 3,
+        'num_tasks': 6,
+    }
+
+def test_clean_pending_with_work(manager, worked, work_spec, work_units):
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'pending'])
+    assert (manager.stdout.getvalue() == 'Removed 1 work units.\n')
+    assert manager.task_master.status(work_spec['name']) == {
+        'num_available': len(work_units) - 6,
+        'num_pending': 0,
+        'num_blocked': 0,
+        'num_failed': 2,
+        'num_finished': 3,
+        'num_tasks': len(work_units) - 1,
+    }
+
+def test_clean_blocked_with_work(manager, worked, work_spec, work_units):
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'blocked'])
+    assert (manager.stdout.getvalue() == 'Removed 0 work units.\n')
+    assert manager.task_master.status(work_spec['name']) == {
+        'num_available': len(work_units) - 6,
+        'num_pending': 1,
+        'num_blocked': 0,
+        'num_failed': 2,
+        'num_finished': 3,
+        'num_tasks': len(work_units),
+    }
+
+def test_clean_failed_with_work(manager, worked, work_spec, work_units):
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'failed'])
+    assert (manager.stdout.getvalue() == 'Removed 2 work units.\n')
+    assert manager.task_master.status(work_spec['name']) == {
+        'num_available': len(work_units) - 6,
+        'num_pending': 1,
+        'num_blocked': 0,
+        'num_failed': 0,
+        'num_finished': 3,
+        'num_tasks': len(work_units) - 2,
+    }
+
+def test_clean_finished_with_work(manager, worked, work_spec, work_units):
+    manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'finished'])
+    assert (manager.stdout.getvalue() == 'Removed 3 work units.\n')
+    assert manager.task_master.status(work_spec['name']) == {
+        'num_available': len(work_units) - 6,
+        'num_pending': 1,
+        'num_blocked': 0,
+        'num_failed': 2,
+        'num_finished': 0,
+        'num_tasks': len(work_units) - 3,
+    }
 
 def test_mode(manager):
     def mode(args, response):
