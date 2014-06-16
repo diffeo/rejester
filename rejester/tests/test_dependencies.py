@@ -39,11 +39,26 @@ def get_and_check_done(task_master):
     assert unit is None
 
 def test_two_no_dependency(task_master):
-    """Add two tasks, with priorities set so that they run in order"""
+    """Add two tasks, which can run in either order"""
     task_master.update_bundle(work_spec_a, work_units_aa, nice=0)
     task_master.update_bundle(work_spec_b, work_units_bb, nice=1)
-    get_and_check_unit(task_master, 'a', 'aa')
-    get_and_check_unit(task_master, 'b', 'bb')
+    u1 = task_master.get_work('worker', available_gb=4)
+    assert u1 is not None
+    u1.finish()
+    u2 = task_master.get_work('worker', available_gb=4)
+    assert u2 is not None
+    u2.finish()
+    # We expect u1 to be 'a' slightly more often than 'b', but both
+    # should be present
+    assert u1.work_spec_name in ['a', 'b']
+    if u1.work_spec_name == 'a':
+        assert u1.key == 'aa'
+        assert u2.work_spec_name == 'b'
+        assert u2.key == 'bb'
+    else:
+        assert u1.key == 'bb'
+        assert u2.work_spec_name == 'a'
+        assert u2.key == 'aa'
     get_and_check_done(task_master)
 
 def test_two_simple_dependency(task_master):

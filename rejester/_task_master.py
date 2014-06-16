@@ -11,10 +11,10 @@ import uuid
 import time
 import logging
 import psutil
+import random
 import socket
 import traceback
 import pkg_resources
-from operator import itemgetter
 
 from rejester._registry import Registry
 from rejester.exceptions import ProgrammerError, LockError, \
@@ -210,7 +210,8 @@ class WorkUnit(object):
         self._module_cache = None  # storage for lazy getter property
 
     def __repr__(self):
-        return 'WorkUnit(key=%s)' % self.key
+        return ('WorkUnit(work_spec_name={0.work_spec_name}, key={0.key})'
+                .format(self))
 
     @property
     def spec(self):
@@ -1347,7 +1348,6 @@ class TaskMaster(object):
         :param lease_time: how many seconds to lease a WorkUnit
 
         '''
-        start = time.time()
 
         if not isinstance(available_gb, (int, float)):
             raise ProgrammerError('must specify available_gb')
@@ -1356,20 +1356,33 @@ class TaskMaster(object):
 
         try: 
             with self.registry.lock(atime=1000, ltime=10000) as session:
-                ## figure out which work_specs have low nice levels
+                ## use the simple niceness algorithm described in
+                ## http://en.wikipedia.org/wiki/Nice_(Unix)
+                ## where each job gets a (20-niceness) share
                 nice_levels = session.pull(NICE_LEVELS)
-                nice_levels = nice_levels.items()
-                nice_levels.sort(key=itemgetter(1))
+                for work_spec_name, nice in nice_levels.iteritems():
+                    nice = min(19, nice)
+                    nice = max(-19, nice)
+                    nice = 20 - nice
+                    nice_levels[work_spec_name] = nice
 
-                work_specs = session.pull(WORK_SPECS)
-                for work_spec_name, nice in nice_levels:
-                    self.registry.re_acquire_lock(ltime=10000)
-
+                while nice_levels:
+                    total_nice = sum(nice_levels.values())
+                    score = random.randrange(total_nice)
+                    work_spec_name = None
+                    total_score = 0
+                    for wsn, nice in nice_levels.iteritems():
+                        total_score += nice
+                        if total_score > score:
+                            work_spec_name = wsn
+                            break
+                    assert work_spec_name is not None
+                    nice_levels.pop(work_spec_name)
+                    
                     ## verify sufficient memory
-                    if available_gb < work_specs[work_spec_name]['min_gb']:
+                    work_spec = session.get(WORK_SPECS, work_spec_name)
+                    if available_gb < work_spec['min_gb']:
                         continue
-
-                    logger.debug('considering %s %s', work_spec_name, nice_levels)
 
                     ## try to get a task
                     wu_expires = time.time() + lease_time
@@ -1391,9 +1404,9 @@ class TaskMaster(object):
                         break
 
         except (LockError, EnvironmentError), exc:
-            logger.critical('failed to get work', exc_info=True)
+            logger.error('took to long to get work', exc_info=True)
 
-        logger.debug('get_work %s in %.3f', work_unit is not None, time.time() - start)
+        logger.debug('get_work %r', work_unit)
         return work_unit
 
     def get_assigned_work_unit(
