@@ -73,16 +73,15 @@ Exceptions
 
 
 
-
 Example: StreamCorpus Simple Filter Stage
------------------------------------------
+=========================================
 
 Rejester makes it easy to run large batches of small jobs, such as a
 couple million runs of tagging batches of 500 documents with an NER
 tagger or filtering to smaller sets of documents.
 
-As a simple and highly relevant example, we illustrate how to write a
-filter function as an external stage and run it in AWS EC2.
+As a simple example, we illustrate how to write a filter function as
+an external stage and run it in AWS EC2.
 
 :mod:`streamcorpus_pipeline` has several built-in filters `source in github
 <https://github.com/trec-kba/streamcorpus-pipeline/blob/master/streamcorpus_pipeline/_filters.py>`_.
