@@ -577,17 +577,28 @@ def test_run_one_one(manager, work_spec, task_master, loaded):
     assert task_master.num_failed(work_spec['name']) == 0
     assert task_master.num_finished(work_spec['name']) == 1
 
-def test_run_worker_args(manager, tmpdir):
-    with pytest.raises(SystemExit):
-        manager.runcmd('run_worker', ['--pidfile', 'foo']) # not absolute
-    with pytest.raises(SystemExit):
-        manager.runcmd('run_worker', ['--logpath', 'foo'])
-    with pytest.raises(SystemExit):
-        manager.runcmd('run_worker', ['--pidfile', # missing dir
-                                      str(tmpdir.join('missing', 'pidfile'))])
-    with pytest.raises(SystemExit):
-        manager.runcmd('run_worker', ['--logpath', # missing dir
-                                      str(tmpdir.join('missing', 'logpath'))])
+def test_run_worker_args(manager, tmpdir, global_config):
+    cfgfile = str(tmpdir.join('config.yaml'))
+    with open(cfgfile, 'w') as f:
+        f.write(yaml.dump(global_config))        
+    
+    for flag, value in [('--pidfile', 'foo'),  # not absolute
+                        ('--logpath', 'foo'),
+                        ('--pidfile', # missing dir
+                         str(tmpdir.join('missing', 'pidfile'))),
+                        ('--logpath', # missing dir
+                         str(tmpdir.join('missing', 'logpath'))),
+                        ]:
+        if 'pid' in flag:
+            pidfile = value
+            logfile = ''
+        if 'log' in flag:
+            logfile = value
+            pidile = ''
+        rc = subprocess.call([sys.executable,
+                          '-m', 'rejester.run_multi_worker', '-c', cfgfile,
+                          '--pidfile', pidfile, '--logpath', logfile])
+        assert rc != 0
 
 def test_run_worker_minimal(manager, tmpdir, global_config):
     # The *only* reliable feedback we can get here is via pidfile.
@@ -600,8 +611,7 @@ def test_run_worker_minimal(manager, tmpdir, global_config):
         f.write(yaml.dump(global_config))        
     
     rc = subprocess.call([sys.executable,
-                          '-m', 'rejester.run', '-c', cfgfile,
-                          'run_worker',
+                          '-m', 'rejester.run_multi_worker', '-c', cfgfile,
                           '--pidfile', pidfile, '--logpath', logfile])
     assert rc == 0
 
@@ -646,8 +656,7 @@ def test_run_worker_sigterm(tmpdir, global_config):
         f.write(yaml.dump(global_config))        
     
     rc = subprocess.call([sys.executable,
-                          '-m', 'rejester.run', '-c', cfgfile,
-                          'run_worker',
+                          '-m', 'rejester.run_multi_worker', '-c', cfgfile,
                           '--pidfile', pidfile, '--logpath', logfile])
     assert rc == 0
 

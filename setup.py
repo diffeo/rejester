@@ -132,6 +132,7 @@ setup(
     entry_points={
         'console_scripts': [
             'rejester = rejester.run:main',
+            'rejester_worker = rejester.run_multi_worker:main',
             'rejester_test = rejester.tests.run:main',
         ],
     },

@@ -172,9 +172,7 @@ given on the command line.  The tool provides the following commands:
 from __future__ import absolute_import
 import argparse
 import json
-import lockfile
 import logging
-import logging.config
 import os
 import sys
 import time
@@ -187,7 +185,7 @@ import dblogger
 import rejester
 from rejester.exceptions import NoSuchWorkSpecError, NoSuchWorkUnitError
 from rejester._task_master import TaskMaster
-from rejester.workers import run_worker, MultiWorker, SingleWorker
+from rejester.workers import SingleWorker
 import yakonfig
 from yakonfig.cmd import ArgParseCmd
 
@@ -564,59 +562,6 @@ class Manager(ArgParseCmd):
             worker.unregister()
         if not rc:
             self.exitcode = 2
-
-    def args_run_worker(self, parser):
-        parser.add_argument('--pidfile', metavar='FILE', type=absolute_path,
-                            help='file to hold process ID of worker')
-        parser.add_argument('--logpath', metavar='FILE', type=absolute_path,
-                            help='file to receive local logs')
-    def do_run_worker(self, args):
-        '''run a rejester worker as a background process'''
-        pidfile = args.pidfile
-        logpath = args.logpath
-
-        # Shut off all logging...it can cause problems
-        logging.config.dictConfig({
-            'version': 1,
-            'disable_existing_loggers': False
-        })
-        gconfig = yakonfig.get_global_config()
-        yakonfig.clear_global_config()
-        # Don't try to log to the console or debug if set
-        if 'logging' in gconfig:
-            if 'root' in gconfig['logging']:
-                if 'handlers' in gconfig['logging']['root']:
-                    handlers = gconfig['logging']['root']['handlers']
-                    for handler in 'console', 'debug':
-                        if handler in handlers:
-                            handlers.remove(handler)
-
-        if pidfile:
-            pidfile_lock = lockfile.FileLock(pidfile)
-        else:
-            pidfile_lock = None
-        context = daemon.DaemonContext(pidfile=pidfile_lock)
-        with context:
-            try:
-                if pidfile:
-                    open(pidfile,'w').write(str(os.getpid()))
-                # Reestablish loggers
-                yakonfig.set_default_config([dblogger], config=gconfig)
-                if logpath:
-                    formatter = dblogger.FixedWidthFormatter()
-                    # TODO: do we want byte-size RotatingFileHandler or TimedRotatingFileHandler?
-                    handler = logging.handlers.RotatingFileHandler(
-                        logpath, maxBytes=10000000, backupCount=3)
-                    handler.setFormatter(formatter)
-                    logging.getLogger('').addHandler(handler)
-                logger.debug('inside daemon context')
-                run_worker(MultiWorker, self.config)
-                logger.debug('run_worker exited')
-            except Exception, exc:
-                logp = logpath or os.path.join('/tmp', 'rejester-failure.log')
-                open(logp, 'a').write(traceback.format_exc(exc))
-                raise
-
 
 def main():
     parser = argparse.ArgumentParser(
