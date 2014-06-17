@@ -113,7 +113,7 @@ You can create your own as external stages.  For example, see this `exact name m
             path = config.get('match_strings_path')
             match_strings = open(path).read().splitlines()
             match_strings = map(strip_string, map(unicode, match_strings))
-            self.matcher = re.compile('(.|\n)*?(%s)' % '|'.join(match_strings), re.I)
+            self.matcher = re.compile("(.|\n)*?(%s)" % '|'.join(match_strings), re.I)
 
         def __call__(self, si, context):
             'only pass StreamItems that match'
