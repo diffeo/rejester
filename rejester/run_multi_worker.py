@@ -84,7 +84,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='manage the rejester distributed work system')
     args_run_worker(parser)
-    args = yakonfig.parse_args(parser, [yakonfig, dblogger, rejester])
+    args = yakonfig.parse_args(parser, [yakonfig, rejester])
     fork_worker(args)
 
 
