@@ -51,6 +51,7 @@ from collections import deque
 
 from rejester import TaskMaster, Worker
 from rejester._task_master import WORKER_OBSERVED_MODE, WORKER_STATE_
+from rejester._registry import nice_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ def run_worker(worker_class, *args, **kwargs):
         logger.error('worker {!r} died'.format(worker_class), exc_info=True)
         raise
     finally:
+        logger.debug('preparing to worker.unregister() for %r', worker)
         worker.unregister()
 
 
@@ -182,6 +184,7 @@ class MultiWorker(Worker):
         self._event_queue = multiprocessing.Queue()
         self._mode = None
         self.pool = None
+        logger.debug('MultiWorker initialized')
 
     _available_gb = None
 
@@ -226,7 +229,7 @@ class MultiWorker(Worker):
 
     def _get_and_start_work(self):
         "return (async_result, work_unit) or (None, None)"
-        worker_id = uuid.uuid4().hex
+        worker_id = nice_identifier()
         work_unit = self.task_master.get_work(worker_id, available_gb=self.available_gb())
         if work_unit is None:
             return None, None

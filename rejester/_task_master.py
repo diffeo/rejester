@@ -16,7 +16,7 @@ import socket
 import traceback
 import pkg_resources
 
-from rejester._registry import Registry
+from rejester._registry import Registry, nice_identifier
 from rejester.exceptions import ProgrammerError, LockError, \
     LostLease, EnvironmentError, NoSuchWorkSpecError, NoSuchWorkUnitError
 
@@ -100,7 +100,7 @@ class Worker(object):
         '''
         if self.worker_id:
             raise ProgrammerError('Worker.register cannot be called again without first calling unregister; it is not idempotent')
-        self.worker_id = uuid.uuid4().hex
+        self.worker_id = nice_identifier()
         self.heartbeat()
         return self.worker_id
 

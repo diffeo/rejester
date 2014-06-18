@@ -10,13 +10,16 @@ import time
 import uuid
 import json
 import logging
+import os
 import random
 import socket
+import struct
 import atexit
 import contextlib
 from uuid import UUID
 from functools import wraps
 from collections import defaultdict
+from operator import mul
 
 import redis
 
@@ -25,6 +28,12 @@ from rejester.exceptions import EnvironmentError, LockError, \
 from rejester._redis import RedisBase
 
 logger = logging.getLogger(__name__)
+
+def nice_identifier():
+    'do not use uuid.uuid4, because it can block'
+    big = reduce(mul, struct.unpack('<LLLL', os.urandom(16)), 1)
+    big = big % 2**128
+    return uuid.UUID(int=big).hex
 
 class Registry(RedisBase):
     '''Store string-keyed dictionaries in Redis.
@@ -187,7 +196,7 @@ class Registry(RedisBase):
                 session.set('dict', 'key', d)
 
         '''
-        identifier = str(uuid.uuid4())
+        identifier = nice_identifier()
         if self._acquire_lock(identifier, atime, ltime) != identifier:
             raise LockError("could not acquire lock")
         try:
