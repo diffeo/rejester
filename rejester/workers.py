@@ -282,7 +282,7 @@ class MultiWorker(Worker):
         tm = self.task_master
         num_workers = multiprocessing.cpu_count()
         if 'tasks_per_cpu' in self.config:
-            num_workers *= self.config.get(tasks_per_cpu) or 1
+            num_workers *= self.config.get('tasks_per_cpu') or 1
         if self.pool is None:
             self.pool = multiprocessing.Pool(num_workers, maxtasksperchild=1)
         ## slots is a fixed-length list of [AsyncRsults, WorkUnit]
