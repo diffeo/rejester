@@ -178,6 +178,10 @@ class MultiWorker(Worker):
     at :attr:`~rejester.TaskMaster.TERMINATE` from a previous
     execution.
 
+    If `tasks_per_cpu` is set in the configuration block for rejester,
+    then that many child process will be launched for each CPU on the
+    machine.
+
     '''
     def __init__(self, config):
         super(MultiWorker, self).__init__(config)
@@ -277,6 +281,8 @@ class MultiWorker(Worker):
 
         tm = self.task_master
         num_workers = multiprocessing.cpu_count()
+        if 'tasks_per_cpu' in self.config:
+            num_workers *= self.config.get(tasks_per_cpu) or 1
         if self.pool is None:
             self.pool = multiprocessing.Pool(num_workers, maxtasksperchild=1)
         ## slots is a fixed-length list of [AsyncRsults, WorkUnit]
