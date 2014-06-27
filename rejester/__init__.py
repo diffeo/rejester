@@ -209,7 +209,7 @@ in your yaml configuration file:
 
 Then, you can run the following commands to put tasks into the rejester queue:
 
-.. code-block: bash
+.. code-block:: bash
 
     ## populate the task queue with jobs
     streamcorpus_directory -c examples/streamcorpus-2014-v0_3_0-exact-match-example.yaml --file-lists list_of_s3_paths.txt
