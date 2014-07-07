@@ -54,6 +54,8 @@ import threading
 import time
 import uuid
 
+from setproctitle import setproctitle
+
 import dblogger
 import rejester
 from rejester import TaskMaster, Worker
@@ -338,7 +340,7 @@ class SingleWorker(Worker):
     which calls :meth:`as_child`.
 
     '''
-    def run(self):
+    def run(self, set_title=False):
         '''Get exactly one job, run it, and return.
 
         Does nothing (but returns :const:`False`) if there is no work
@@ -346,6 +348,8 @@ class SingleWorker(Worker):
         if :func:`rejester.TaskMaster.get_mode` returns
         :attr:`~rejester.TaskMaster.TERMINATE`.
 
+        :param set_title: if true, set the process's title with the
+          work unit name
         :return: :const:`True` if there was a job (even if it failed)
 
         '''
@@ -353,6 +357,9 @@ class SingleWorker(Worker):
         unit = self.task_master.get_work(self.worker_id, available_gb)
         if unit is None: return False
         try:
+            if set_title:
+                setproctitle('rejester worker {} {}'
+                             .format(unit.work_spec_name, unit.key))
             unit.run()
             unit.finish()
         except Exception, e:
@@ -377,11 +384,12 @@ class SingleWorker(Worker):
 
         '''
         try:
+            setproctitle('rejester worker')
             yakonfig.set_default_config([yakonfig, dblogger, rejester],
                                         config=global_config)
             worker = cls(yakonfig.get_global_config(rejester.config_name))
             worker.register()
-            did_work = worker.run()
+            did_work = worker.run(set_title=True)
             worker.unregister()
             if did_work:
                 sys.exit(cls.EXIT_SUCCESS)
@@ -598,6 +606,7 @@ class ForkWorker(Worker):
         priority (Python integer) and message (unformatted string).
 
         '''
+        setproctitle('rejester fork_worker log task')
         yakonfig.set_default_config([yakonfig, dblogger], config=gconfig)
         try:
             while True:
@@ -809,6 +818,8 @@ class ForkWorker(Worker):
         and spawns off a bunch of child processes.
 
         '''
+        setproctitle('rejester fork_worker for namespace {}'
+                     .format(self.config.get('namespace', None)))
         self.set_signal_handlers()
         try:
             self.start_log_child()

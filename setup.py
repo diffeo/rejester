@@ -114,6 +114,7 @@ setup(
         'redis',
         'psutil',
         'python-daemon',
+        'setproctitle',
         # ], tests_require=[
         'pexpect',
         'pytest',
