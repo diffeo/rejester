@@ -10,6 +10,7 @@ config_name = 'rejester'
 
 default_config = {
     'app_name': 'rejester',
+    'worker': 'multi_worker',
 }
 
 def add_arguments(parser):

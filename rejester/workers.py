@@ -30,28 +30,36 @@ use this worker infrastructure at all.
     :members:
     :show-inheritance:
 
+.. autoclass:: ForkWorker
+    :members:
+    :show-inheritance:
+
 .. autofunction:: run_worker
 
 '''
 from __future__ import absolute_import
-import os
-import sys
-import time
-import uuid
+from collections import deque
+import errno
 import logging
-import gevent
+import multiprocessing
+from operator import itemgetter
+import os
 import psutil
 import random
 import Queue
-import multiprocessing
+import signal
+import struct
+import sys
 import threading
-from signal import signal, SIGHUP, SIGTERM, SIGABRT
-from operator import itemgetter
-from collections import deque
+import time
+import uuid
 
+import dblogger
+import rejester
 from rejester import TaskMaster, Worker
 from rejester._task_master import WORKER_OBSERVED_MODE, WORKER_STATE_
 from rejester._registry import nice_identifier
+import yakonfig
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +141,8 @@ class HeadlessWorker(Worker):
 
         # Now go on as normal
         super(HeadlessWorker, self).__init__(config)
-        for sig_num in [SIGTERM, SIGHUP, SIGABRT]:
-            signal(sig_num, self.terminate)
+        for sig_num in [signal.SIGTERM, signal.SIGHUP, signal.SIGABRT]:
+            signal.signal(sig_num, self.terminate)
         self.work_unit = self.task_master.get_assigned_work_unit(
             worker_id, work_spec_name, work_unit_key)
         ## carry this to overwrite self.worker_id after .register()
@@ -322,7 +330,14 @@ class MultiWorker(Worker):
         logger.info('MultiWorker exiting')
 
 class SingleWorker(Worker):
-    '''Worker that runs exactly one job when called.'''
+    '''Worker that runs exactly one job when called.
+
+    This is used by the :meth:`rejester.run.Manager.do_run_one`
+    command to run a single job; that just calls :meth:`run`.  This
+    is also invoked as the child process by :class:`ForkWorker`,
+    which calls :meth:`as_child`.
+
+    '''
     def run(self):
         '''Get exactly one job, run it, and return.
 
@@ -343,3 +358,480 @@ class SingleWorker(Worker):
         except Exception, e:
             unit.fail(e)
         return True
+
+    #: Exit code from :meth:`as_child` if it ran a work unit (maybe
+    #: unsuccessfully).
+    EXIT_SUCCESS = 0
+    #: Exit code from :meth:`as_child` if there was a failure getting
+    #: the work unit.
+    EXIT_EXCEPTION = 1
+    #: Exit code from :meth:`as_child` if there was no work to do.
+    EXIT_BORED = 2
+
+    @classmethod
+    def as_child(cls, global_config):
+        '''Run a single job in a child process.
+
+        This method never returns; it always calls :func:`sys.exit`
+        with an error code that says what it did.
+
+        '''
+        try:
+            yakonfig.set_default_config([yakonfig, dblogger, rejester],
+                                        config=global_config)
+            worker = cls(yakonfig.get_global_config(rejester.config_name))
+            worker.register()
+            did_work = worker.run()
+            worker.unregister()
+            if did_work:
+                sys.exit(cls.EXIT_SUCCESS)
+            else:
+                sys.exit(cls.EXIT_BORED)
+        except Exception, e:
+            # There's some off chance we have logging.
+            # You will be here if redis is down, for instance,
+            # and the yakonfig dblogger setup runs but then
+            # the get_work call fails with an exception.
+            if len(logging.root.handlers) > 0:
+                logger.critical('failed to do any work', exc_info=e)
+            sys.exit(cls.EXIT_EXCEPTION)
+
+class ForkWorker(Worker):
+    '''Parent worker that runs multiple jobs concurrently.
+
+    This manages a series of child processes, each of which runs
+    a :class:`SingleWorker`.  It runs as long as the global rejester
+    state is not :class:`rejester.TaskMaster.TERMINATE`.
+
+    This takes some additional optional configuration options.  A
+    typical configuration will look like:
+
+    .. code-block:: yaml
+
+        rejester:
+          # required rejester configuration
+          registry_addresses: [ 'redis.example.com:6379' ]
+          app_name: rejester
+          namespace: namespace
+
+          # indicate which worker to use
+          worker: fork_worker
+          fork_worker:
+            # set this or num_workers; num_workers takes precedence
+            num_workers_per_core: 1
+            # how often to check if there is more work
+            poll_interval: 5
+            # how often to start more workers
+            spawn_interval: 0.01
+
+    This spawns child processes to do work.  Each child process does at
+    most one work unit.  If `num_workers` is set, at most this many
+    concurrent workers will be running at a time.  If `num_workers` is
+    not set but `num_workers_per_core` is, the maximum number of workers
+    is a multiple of the number of processor cores available.  The
+    default setting is 1 worker per core, but setting this higher can
+    be beneficial if jobs are alternately network- and CPU-bound.
+
+    The parent worker runs a fairly simple state machine.  It awakens
+    on startup, whenever a child process exits, or after a timeout.
+    When it awakens, it checks on the status of all of its children,
+    and collects the exit status of those that have finished.  If any
+    failed or reported no more work, the timeout is set to
+    `poll_interval`, and no more workers are started until that
+    timeout has passed.  Otherwise, if it is not running the maximum
+    number of workers, it starts one exactly and sets the timeout to
+    `spawn_interval`.
+
+    This means that if the system is operating normally, and there is
+    work to do, then it will start all of its workers in `num_workers`
+    times `spawn_interval` time.  If the system runs out of work, or
+    if it starts all of its workers, it will check for work or system
+    shutdown every `poll_interval`.
+
+    .. todo:: This should become the default process-level worker,
+              replacing :class:`MultiWorker`.
+
+    '''
+    
+    '''Several implementation notes:
+    
+    fork() and logging don't mix.  While we're better off here than
+    using :mod:`multiprocessing` (which forks from a thread, so the
+    child can start up with a log handler locked) there are still
+    several cases like syslog or dblogger handlers that depend on a
+    network connection that won't be there in the child.
+
+    That means that *nothing in the parent gets to log at all*.  We
+    need to maintain a separate child process to do logging.
+
+    ``debug_worker`` is a hidden additional configuration option.  It
+    can cause a lot of boring information to get written to the log.
+    It is a list of keywords.  ``children`` logs all process creation
+    and destruction.  ``loop`` shows what we're thinking in the main
+    loop.
+
+    '''
+
+    config_name = 'fork_worker'
+    default_config = {
+        'num_workers': None,
+        'num_workers_per_core': 1,
+        'poll_interval': 5,
+        'spawn_interval': 0.01,
+        'debug_worker': None,
+    }
+    @classmethod
+    def config_get(cls, config, key):
+        return config.get(key, cls.default_config[key])
+
+    def __init__(self, config):
+        '''Create a new forking worker.
+
+        This starts up with no children and no logger, and it will
+        set itself up and contact Redis as soon as :meth:`run` is called.
+
+        :param dict config: ``rejester`` config dictionary
+
+        '''
+        super(ForkWorker, self).__init__(config)
+        c = config.get(self.config_name, {})
+        self.num_workers = self.config_get(c, 'num_workers')
+        if not self.num_workers:
+            num_cores = 0
+            # This replicates the Good Unix case of multiprocessing.cpu_count()
+            try:
+                num_cores = os.sysconf('SC_NPROCESSORS_ONLN')
+            except (ValueError, OSError, AttributeError):
+                pass
+            num_cores = max(1, num_cores)
+            num_workers_per_core = self.config_get(c, 'num_workers_per_core')
+            self.num_workers = num_workers_per_core * num_cores
+        self.poll_interval = self.config_get(c, 'poll_interval')
+        self.spawn_interval = self.config_get(c, 'spawn_interval')
+        self.debug_worker = c.get('debug_worker', [])
+        self.children = set()
+        self.log_child = None
+        self.log_fd = None
+        self.shutting_down = False
+        self.last_mode = None
+        self.old_sigabrt = None
+        self.old_sigint = None
+        self.old_sigpipe = None
+        self.old_sigterm = None
+
+    @staticmethod
+    def pid_is_alive(pid):
+        try:
+            os.kill(pid, 0)
+            # This doesn't actually send a signal, but does still do the
+            # "is pid alive?" check.  If we didn't get an exception, it is.
+            return True
+        except OSError, e:
+            if e.errno == errno.ESRCH:
+                # "No such process"
+                return False
+            raise
+
+    def set_signal_handlers(self):
+        '''Set some signal handlers.
+
+        These react reasonably to shutdown requests, and keep the
+        logging child alive.
+
+        '''
+        def handler(f):
+            def wrapper(signum, backtrace):
+                return f()
+            return wrapper
+
+        self.old_sigabrt = signal.signal(signal.SIGABRT,
+                                         handler(self.scram))
+        self.old_sigint = signal.signal(signal.SIGINT,
+                                        handler(self.stop_gracefully))
+        self.old_sigpipe = signal.signal(signal.SIGPIPE,
+                                         handler(self.live_log_child))
+        signal.siginterrupt(signal.SIGPIPE, False)
+        self.old_sigterm = signal.signal(signal.SIGTERM,
+                                         handler(self.stop_gracefully))
+
+    def clear_signal_handlers(self):
+        '''Undo :meth:`set_signal_handlers`.
+
+        Not only must this be done on shutdown, but after every fork
+        call too.
+
+        '''
+        signal.signal(signal.SIGABRT, self.old_sigabrt)
+        signal.signal(signal.SIGINT, self.old_sigint)
+        signal.signal(signal.SIGPIPE, self.old_sigpipe)
+        signal.signal(signal.SIGTERM, self.old_sigterm)
+
+    def log(self, level, message):
+        '''Write a log message via the child process.
+
+        The child process must already exist; call :meth:`live_log_child`
+        to make sure.  If it has died in a way we don't expect then
+        this will raise :const:`signal.SIGPIPE`.
+
+        '''
+        if self.log_fd is not None:
+            prefix = struct.pack('ii', level, len(message))
+            os.write(self.log_fd, prefix)
+            os.write(self.log_fd, message)
+
+    def debug(self, group, message):
+        '''Maybe write a debug-level log message.
+
+        In particular, this gets written if the hidden `debug_worker`
+        option contains `group`.
+
+        '''
+        if group in self.debug_worker:
+            if 'stdout' in self.debug_worker:
+                print message
+            self.log(logging.DEBUG, message)
+
+    def log_spewer(self, gconfig, fd):
+        '''Child process to manage logging.
+
+        This reads pairs of lines from `fd`, which are alternating
+        priority (Python integer) and message (unformatted string).
+
+        '''
+        yakonfig.set_default_config([yakonfig, dblogger], config=gconfig)
+        try:
+            while True:
+                prefix = os.read(fd, struct.calcsize('ii'))
+                level, msglen = struct.unpack('ii', prefix)
+                msg = os.read(fd, msglen)
+                logger.log(level, msg)
+        except Exception, e:
+            logger.critical('log writer failed', exc_info=e)
+            raise
+        
+    def start_log_child(self):
+        '''Start the logging child process.'''
+        self.stop_log_child()
+        gconfig = yakonfig.get_global_config()
+        read_end, write_end = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            # We are the child
+            self.clear_signal_handlers()
+            os.close(write_end)
+            yakonfig.clear_global_config()
+            self.log_spewer(gconfig, read_end)
+            sys.exit(0)
+        else:
+            # We are the parent
+            self.debug('children', 'new log child with pid {}'.format(pid))
+            self.log_child = pid
+            os.close(read_end)
+            self.log_fd = write_end
+
+    def stop_log_child(self):
+        '''Stop the logging child process.'''
+        if self.log_fd:
+            os.close(self.log_fd)
+            self.log_fd = None
+        if self.log_child:
+            try:
+                self.debug('children', 'stopping log child with pid {}'
+                           .format(self.log_child))
+                os.kill(self.log_child, signal.SIGTERM)
+                os.waitpid(self.log_child, 0)
+            except OSError, e:
+                if e.errno == errno.ESRCH or e.errno == errno.ECHILD:
+                    # already gone
+                    pass
+                else:
+                    raise
+            self.log_child = None
+
+    def live_log_child(self):
+        '''Start the logging child process if it died.'''
+        if not (self.log_child and self.pid_is_alive(self.log_child)):
+            self.start_log_child()
+
+    def do_some_work(self, can_start_more):
+        '''Run one cycle of the main loop.
+
+        If the log child has died, restart it.  If any of the worker
+        children have died, collect their status codes and remove them
+        from the child set.  If there is a worker slot available, start
+        exactly one child.
+
+        :param bool can_start_more: Allowed to start a child?
+        :return:  Time to wait before calling this function again
+
+        '''
+        any_happy_children = False
+        any_sad_children = False
+        any_bored_children = False
+
+        self.debug('loop', 'starting work loop, can_start_more={!r}'
+                   .format(can_start_more))
+        
+        # See if anyone has died
+        while True:
+            try:
+                pid, status = os.waitpid(-1, os.WNOHANG)
+            except OSError, e:
+                if e.errno == errno.ECHILD:
+                    # No children at all
+                    pid = 0
+                else:
+                    raise
+            if pid == 0:
+                break
+            elif pid == self.log_child:
+                self.debug('children',
+                           'log child with pid {} exited'.format(pid))
+                self.start_log_child()
+            elif pid in self.children:
+                self.children.remove(pid)
+                if os.WIFEXITED(status):
+                    code = os.WEXITSTATUS(status)
+                    self.debug('children',
+                               'worker {} exited with code {}'
+                               .format(pid, code))
+                    if code == SingleWorker.EXIT_SUCCESS:
+                        any_happy_children = True
+                    elif code == SingleWorker.EXIT_EXCEPTION:
+                        self.log(logging.WARNING,
+                                 'child {} reported failure'.format(pid))
+                        any_sad_children = True
+                    elif code == SingleWorker.EXIT_BORED:
+                        any_bored_children = True
+                    else:
+                        self.log(logging.WARNING,
+                                 'child {} had odd exit code {}'
+                                 .format(pid, code))
+                elif os.WIFSIGNALED(status):
+                    self.log(logging.WARNING,
+                             'child {} exited with signal {}'
+                             .format(pid, os.WTERMSIG(status)))
+                    any_sad_children = True
+                else:
+                    self.log(logging.WARNING,
+                             'child {} went away with unknown status {}'
+                             .format(pid, status))
+                    any_sad_children = True
+            else:
+                self.log(logging.WARNING,
+                         'child {} exited, but we don\'t recognize it'
+                         .format(pid))
+        
+        # ...what next?
+        # (Don't log anything here; either we logged a WARNING message
+        # above when things went badly, or we're in a very normal flow
+        # and don't want to spam the log)
+        if any_sad_children:
+            self.debug('loop', 'exit work loop with sad child')
+            return self.poll_interval
+
+        if any_bored_children:
+            self.debug('loop', 'exit work loop with no work')
+            return self.poll_interval
+
+        # This means we get to start a child, maybe.
+        if can_start_more and len(self.children) < self.num_workers:
+            pid = os.fork()
+            if pid == 0:
+                # We are the child
+                self.clear_signal_handlers()
+                if self.log_fd:
+                    os.close(self.log_fd)
+                SingleWorker.as_child(yakonfig.get_global_config())
+                # This should never return, but just in case
+                sys.exit(SingleWorker.EXIT_EXCEPTION)
+            else:
+                # We are the parent
+                self.debug('children', 'new worker with pid {}'.format(pid))
+                self.children.add(pid)
+                self.debug('loop', 'exit work loop with a new worker')
+                return self.spawn_interval
+
+        # Absolutely nothing is happening; which means we have all
+        # of our potential workers and they're doing work
+        self.debug('loop', 'exit work loop with full system')
+        return self.poll_interval
+
+    def stop_gracefully(self):
+        '''Refuse to start more processes.
+
+        This runs in response to SIGINT or SIGTERM; if this isn't a
+        background process, control-C and a normal ``kill`` command
+        cause this.
+
+        '''
+        if self.shutting_down:
+            self.log(logging.INFO,
+                     'second shutdown request, shutting down now')
+            self.scram()
+        else:
+            self.log(logging.INFO, 'shutting down after current jobs finish')
+            self.shutting_down = True
+
+    def stop_all_children(self):
+        '''Kill all workers.'''
+        # There's an unfortunate race condition if we try to log this
+        # case: we can't depend on the logging child actually receiving
+        # the log message before we kill it off.  C'est la vie...
+        self.stop_log_child()
+        for pid in self.children:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                os.waitpid(pid, 0)
+            except OSError, e:
+                if e.errno == errno.ESRCH or e.errno == errno.ECHILD:
+                    # No such process
+                    pass
+                else:
+                    raise
+
+    def scram(self):
+        '''Kill all workers and die ourselves.
+
+        This runs in response to SIGABRT, from a specific invocation
+        of the ``kill`` command.  It also runs if
+        :meth:`stop_gracefully` is called more than once.
+
+        '''
+        self.stop_all_children()
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        sys.exit(2)
+
+    def run(self):
+        '''Run the main loop.
+
+        This is fairly invasive: it sets a bunch of signal handlers
+        and spawns off a bunch of child processes.
+
+        '''
+        self.set_signal_handlers()
+        try:
+            self.start_log_child()
+            while True:
+                can_start_more = not self.shutting_down
+                mode = self.heartbeat()
+                if mode != self.last_mode:
+                    self.log(logging.INFO,
+                             'rejester global mode is {!r}'.format(mode))
+                    self.last_mode = mode
+                if mode != TaskMaster.RUN:
+                    can_start_more = False
+                interval = self.do_some_work(can_start_more)
+                # Normal shutdown case
+                if len(self.children) == 0:
+                    if mode == TaskMaster.TERMINATE:
+                        self.log(logger.INFO,
+                                 'stopping for rejester global shutdown')
+                        break
+                    if self.shutting_down:
+                        self.log(logger.INFO,
+                                 'stopping in response to signal')
+                        break
+                time.sleep(interval)
+        finally:
+            self.clear_signal_handlers()
