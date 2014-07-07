@@ -101,6 +101,7 @@ class Worker(object):
         if self.worker_id:
             raise ProgrammerError('Worker.register cannot be called again without first calling unregister; it is not idempotent')
         self.worker_id = nice_identifier()
+        self.task_master.worker_id = self.worker_id
         self.heartbeat()
         return self.worker_id
 
@@ -110,9 +111,11 @@ class Worker(object):
         This requires the worker to already have been :meth:`register()`.
 
         ''' 
-        with self.task_master.registry.lock() as session:
+        with self.task_master.registry.lock(
+                identifier=self.worker_id) as session:
             session.delete(WORKER_STATE_ + self.worker_id)
             session.popmany(WORKER_OBSERVED_MODE, self.worker_id)
+        self.task_master.worker_id = None
         self.worker_id = None
 
     def heartbeat(self):
@@ -125,12 +128,12 @@ class Worker(object):
 
         ''' 
         mode = self.task_master.get_mode()
-        with self.task_master.registry.lock() as session:
+        with self.task_master.registry.lock(
+                identifier=self.worker_id) as session:
             session.set(WORKER_OBSERVED_MODE, self.worker_id, mode,
                         priority=time.time() + self.lifetime)
             session.update(WORKER_STATE_ + self.worker_id, self.environment(), 
                            expire=self.lifetime)
-        logger.debug('worker {} observed mode {}'.format(self.worker_id, mode))
         return mode
 
     @abc.abstractmethod
@@ -314,7 +317,7 @@ class WorkUnit(object):
             raise ProgrammerError('cannot .update() after .finish()')
         if self.failed:
             raise ProgrammerError('cannot .update() after .fail()')
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             if self.finished:
                 logger.debug('WorkUnit(%r) became finished while waiting for lock to update', self.key)
                 return
@@ -342,7 +345,7 @@ class WorkUnit(object):
         '''
         if self.finished or self.failed:
             return
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             if self.finished or self.failed:
                 return
             logger.debug('WorkUnit finish %r', self.key)
@@ -397,7 +400,7 @@ class WorkUnit(object):
             return
         self.data['traceback'] = exc and traceback.format_exc(exc) or exc
         #self.data['worker_state'] = self.worker_state
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             if self.finished or self.failed:
                 return
             session.move(
@@ -544,6 +547,8 @@ class TaskMaster(object):
         self.config = config
         #: Mid-level Redis interface
         self.registry = Registry(config)
+        #: Worker ID, if this is tied to a worker
+        self.worker_id = None
 
     #: Mode constant instructing workers to do work
     RUN = 'RUN'
@@ -568,7 +573,7 @@ class TaskMaster(object):
         '''
         if not mode in [self.TERMINATE, self.RUN, self.IDLE]:
             raise ProgrammerError('mode=%r is not recognized' % mode)
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             session.set('modes', 'mode', mode)
         logger.info('set mode to %s', mode)
 
@@ -578,8 +583,7 @@ class TaskMaster(object):
         :return: rejester mode, :attr:`IDLE` if unset
 
         '''
-        with self.registry.lock() as session:
-            return session.get('modes', 'mode') or self.IDLE
+        return self.registry.get('modes', 'mode') or self.IDLE
 
     def idle_all_workers(self):
         '''Set the global mode to :attr:`IDLE` and wait for workers to stop.
@@ -632,10 +636,9 @@ class TaskMaster(object):
           that have called :meth:`Worker.heartbeat` sufficiently recently
 
         '''
-        with self.registry.lock() as session:
-            return session.filter(
-                WORKER_OBSERVED_MODE, 
-                priority_min=alive and time.time() or '-inf')
+        return self.registry.filter(
+            WORKER_OBSERVED_MODE, 
+            priority_min=alive and time.time() or '-inf')
 
     def get_heartbeat(self, worker_id):
         '''Get the last known state of some worker.
@@ -649,8 +652,7 @@ class TaskMaster(object):
         :see: :meth:`Worker.heartbeat`
 
         '''
-        with self.registry.lock() as session:
-            return session.pull(WORKER_STATE_ + worker_id)
+        return self.registry.pull(WORKER_STATE_ + worker_id)
 
     def dump(self):
         '''Print the entire contents of this to debug log messages.
@@ -659,7 +661,7 @@ class TaskMaster(object):
         a lot of data.
 
         '''
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             for work_spec_name in self.registry.pull(NICE_LEVELS).iterkeys():
                 def scan(sfx):
                     v = self.registry.pull(WORK_UNITS_ + work_spec_name + sfx)
@@ -775,12 +777,11 @@ class TaskMaster(object):
         work spec definitions.
 
         '''
-        with self.registry.lock(atime=1000) as session:
-            return session.pull(WORK_SPECS)
+        return self.registry.pull(WORK_SPECS)
 
     def get_work_spec(self, work_spec_name):
         '''Get the dictionary defining some work spec.'''
-        with self.registry.lock(atime=1000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             return session.get(WORK_SPECS, work_spec_name)
 
     def list_work_units(self, work_spec_name, start=0, limit=None):
@@ -867,7 +868,7 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             now = time.time()
             if work_unit_names is None:
                 count = 0
@@ -904,7 +905,7 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             now = time.time()
             if work_unit_names is None:
                 count = 0
@@ -939,7 +940,7 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             if work_unit_names is None:
                 count = 0
                 while True:
@@ -969,7 +970,7 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             if work_unit_names is None:
                 count = 0
                 while True:
@@ -996,7 +997,7 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock() as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             if work_unit_names is None:
                 count = 0
                 while True:
@@ -1036,7 +1037,7 @@ class TaskMaster(object):
         :param str work_unit_name: name of the work unit
         :return: dictionary description of summary status
         '''
-        with self.registry.lock(atime=1000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             # In the available list?
             (unit,priority) = session.get(WORK_UNITS_ + work_spec_name,
                                           work_unit_key, include_priority=True)
@@ -1092,7 +1093,7 @@ class TaskMaster(object):
         :param str work_unit_key: name of the work unit
         :return: definition of the work unit, or `None`
         '''
-        with self.registry.lock(atime=1000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             work_unit_data = session.get(
                 WORK_UNITS_ + work_spec_name, work_unit_key)
             if not work_unit_data:
@@ -1124,7 +1125,7 @@ class TaskMaster(object):
 
         '''
         self.idle_all_workers()
-        with self.registry.lock(ltime=10000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             session.move_all(WORK_UNITS_ + work_spec_name + _FINISHED,
                              WORK_UNITS_ + work_spec_name)
             session.reset_priorities(WORK_UNITS_ + work_spec_name, 0)
@@ -1147,7 +1148,7 @@ class TaskMaster(object):
         self.validate_work_spec(work_spec)
         
         work_spec_name = work_spec['name']
-        with self.registry.lock(atime=1000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             session.update(NICE_LEVELS, {work_spec_name: nice})
             session.update(WORK_SPECS,  {work_spec_name: work_spec})
             
@@ -1155,7 +1156,7 @@ class TaskMaster(object):
             work_units = work_units.items()
             window_size = 10**4
             for i in xrange(0, len(work_units), window_size):
-                self.registry.re_acquire_lock(ltime=2000)
+                self.registry.re_acquire_lock()
                 session.update(WORK_UNITS_ + work_spec_name, 
                                dict(work_units[i: i + window_size]))
 
@@ -1212,7 +1213,7 @@ class TaskMaster(object):
         # correct.
         later_spec, later_unit, later_unitdef = work_unit
         earlier_spec, earlier_unit, earlier_unitdef = depends_on
-        with self.registry.lock(atime=1000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             # Bail if either work spec doesn't already exist
             if session.get(WORK_SPECS, later_spec) is None:
                 raise NoSuchWorkSpecError(later_spec)
@@ -1312,7 +1313,7 @@ class TaskMaster(object):
           obtained
         
         '''
-        with self.registry.lock(atime=1000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             # This sequence is safe even if this system dies
             units = {}
             for work_unit_name in work_unit_names:
@@ -1334,7 +1335,7 @@ class TaskMaster(object):
 
     def nice(self, work_spec_name, nice):        
         '''Change the priority of an existing work spec.'''
-        with self.registry.lock(atime=1000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             session.update(NICE_LEVELS, dict(work_spec_name=nice))
 
     def get_work(self, worker_id, available_gb=None, lease_time=300):
@@ -1355,7 +1356,7 @@ class TaskMaster(object):
         work_unit = None
 
         try: 
-            with self.registry.lock(atime=1000, ltime=10000) as session:
+            with self.registry.lock(identifier=self.worker_id) as session:
                 ## use the simple niceness algorithm described in
                 ## http://en.wikipedia.org/wiki/Nice_(Unix)
                 ## where each job gets a (20-niceness) share
@@ -1415,7 +1416,7 @@ class TaskMaster(object):
         '''get a specific WorkUnit that has already been assigned to a
         particular worker_id
         '''
-        with self.registry.lock(atime=1000, ltime=10000) as session:
+        with self.registry.lock(identifier=self.worker_id) as session:
             assigned_work_unit_key = session.get(
                 WORK_UNITS_ + work_spec_name + '_locks', worker_id)
             if not assigned_work_unit_key == work_unit_key:

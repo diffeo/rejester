@@ -542,6 +542,23 @@ def test_mode(manager):
     with pytest.raises(SystemExit):
         manager.runcmd('mode', ['other'])
 
+def test_global_lock_unlocked(manager):
+    manager.runcmd('global_lock', [])
+    assert manager.stdout.getvalue() == '(unlocked)\n'
+
+def test_global_lock_locked(manager, worker):
+    with worker.task_master.registry.lock(identifier=worker.worker_id):
+        manager.runcmd('global_lock', [])
+    assert manager.stdout.getvalue().startswith(worker.worker_id)
+
+def test_global_lock_purge(manager, worker):
+    registry = worker.task_master.registry
+    with registry.lock(identifier=worker.worker_id) as session:
+        manager.runcmd('global_lock', ['--purge'])
+        assert manager.stdout.getvalue() == ''
+        with pytest.raises(rejester.exceptions.LockError):
+            registry.filter('x')
+
 def test_workers_trivial(manager):
     manager.runcmd('workers', [])
     assert manager.stdout.getvalue() == ''

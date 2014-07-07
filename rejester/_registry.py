@@ -50,11 +50,11 @@ class Registry(RedisBase):
 
     The lock mechanism ensures that no two Registry objects do work
     concurrently, even running on separate systems.  Specific method
-    descriptions will note if they can run without a lock.  In general,
-    read-only operations will always run successfully without a lock
-    but will check for the correct lock if one is given; read-write
-    operations will run without a lock only if no other worker holds
-    one either.
+    descriptions will note if they can run without a lock.  In
+    general, read-only operations will always run successfully without
+    a lock but will check for the correct lock if one is given;
+    certain very simple operations do no lock checking at all; and
+    read-write operations always require a lock.
 
     The basic data object is a string-keyed dictionary stored under
     some key.  The dictionary keys are also stored in a prioritized
@@ -80,35 +80,6 @@ class Registry(RedisBase):
         ## populated only when lock is acquired
         self._session_lock_identifier = None
 
-        self._startup()
-        atexit.register(self._exit)
-
-        logger.debug('worker_id=%r  starting up on hostname=%r', 
-                     self.worker_id, socket.gethostbyname(socket.gethostname()))
-
-    def _startup(self):
-        conn = redis.Redis(connection_pool=self.pool)
-
-        ## Get a unique worker id from the registry
-        self.worker_id = conn.incrby(self._namespace('worker_ids'), 1)
-
-        ## Add worker id to list of current workers
-        conn.sadd(self._namespace('cur_workers'), self.worker_id)
-
-        ## store the local_ip of this worker for debugging
-        conn.set(self._namespace(self.worker_id) + '_ip', self._local_ip)
-
-    def _exit(self):
-        conn = redis.Redis(connection_pool=self.pool)
-
-        ## cleanup the worker's state
-        #with self.lock() as session:
-        #    session...
-
-        ## Remove the worker from the list of workers
-        conn.srem(self._namespace('cur_workers'), self.worker_id)
-        logger.debug('atexit: worker_id=%r closed registry client', self.worker_id)
-
     def _conn(self):
         '''debugging aid to easily grab a connection from the connection pool
 
@@ -116,18 +87,24 @@ class Registry(RedisBase):
         conn = redis.Redis(connection_pool=self.pool)
         return conn
 
-    def _all_workers(self):
-        conn = redis.Redis(connection_pool=self.pool)
-        return conn.smembers(self._namespace('cur_workers'))
-
     @property
     def _lock_name(self):
         '''Name of the key for the global lock.'''
         return self._namespace('global_registry_lock')
 
-    def _acquire_lock(self, identifier, atime=600, ltime=600):
-        '''Acquire a lock for a given identifier.  Contend for the lock for
-        atime, and hold the lock for ltime.
+    def _acquire_lock(self, identifier, atime=30, ltime=5):
+        '''Acquire a lock for a given identifier.
+
+        If the lock cannot be obtained immediately, keep trying at random
+        intervals, up to 3 seconds, until `atime` has passed.  Once the
+        lock has been obtained, continue to hold it for `ltime`.
+
+        :param str identifier: lock token to write
+        :param int atime: maximum time (in seconds) to acquire lock
+        :param int ltime: maximum time (in seconds) to own lock
+        :return: `identifier` if the lock was obtained, :const:`False`
+          otherwise
+
         '''
         conn = redis.Redis(connection_pool=self.pool)
         end = time.time() + atime
@@ -143,27 +120,45 @@ class Registry(RedisBase):
         return False
 
 
-    def re_acquire_lock(self, ltime=600):
-        '''Re-acquire the lock'''
+    def re_acquire_lock(self, ltime=5):
+        '''Re-acquire the lock.
+
+        You must already own the lock; this is best called from
+        within a :meth:`lock` block.
+
+        :param int ltime: maximum time (in seconds) to own lock
+        :return: the session lock identifier
+        :raise rejester.exceptions.EnvironmentError:
+          if we didn't already own the lock
+
+        '''
         conn = redis.Redis(connection_pool=self.pool)
-        if conn.set(self._lock_name, self._session_lock_identifier,
-                    ex=ltime, xx=True):
-            # logger.debug('re-acquired lock %s', self._lock_name)
-            return self._session_lock_identifier
+        script = conn.register_script('''
+        if redis.call("get", KEYS[1]) == ARGV[1]
+        then
+          return redis.call("expire", KEYS[1], ARGV[2])
+        else
+          return -1
+        end
+        ''')
+        ret = script(keys=[self._lock_name],
+                     args=[self._session_lock_identifier, ltime])
+        if ret != 1:
+            raise EnvironmentError('failed to re-acquire lock')
 
-        raise EnvironmentError('failed to re-acquire lock')
-
+        # logger.debug('re-acquired lock %s', self._lock_name)
+        return self._session_lock_identifier
 
     def _release_lock(self, identifier):
         '''Release the lock.
 
-        Checks that you do actually hold the lock, and raises
-        :exc:`rejester.exceptions.EnvironmentError` if you don't.
+        This requires you to actually have owned the lock.  On return
+        you definitely do not own it, but if somebody else owned it
+        before calling this function, they still do.
 
-        .. todo:: Most other functions that do this check raise
-                  :exc:`rejester.exceptions.LockError` instead,
-                  and this will probably be migrated to use that
-                  eventually.
+        :param str identifier: the session lock identifier
+        :return: :const:`True` if you actually did own the lock,
+          :const:`False` if you didn't
 
         '''
         conn = redis.Redis(connection_pool=self.pool)
@@ -177,14 +172,10 @@ class Registry(RedisBase):
         ''')
         num_keys_deleted = script(keys=[self._lock_name],
                                   args=[identifier])
-        if num_keys_deleted == -1:
-            ## registry_lock no long owned by this process
-            raise EnvironmentError(
-                'Lost lock in registry already')
-        return True
+        return (num_keys_deleted == 1)
 
     @contextlib.contextmanager
-    def lock(self, atime=600, ltime=600):
+    def lock(self, atime=30, ltime=5, identifier=None):
         '''Context manager to acquire the namespace global lock.
 
         This is typically used for multi-step registry operations,
@@ -195,8 +186,18 @@ class Registry(RedisBase):
                 del d['traceback']
                 session.set('dict', 'key', d)
 
+        Callers may provide their own `identifier`; if they do, they
+        must ensure that it is reasonably unique (e.g., a UUID).
+        Using a stored worker ID that is traceable back to the lock
+        holder is a good practice.
+
+        :param int atime: maximum time (in seconds) to acquire lock
+        :param int ltime: maximum time (in seconds) to own lock
+        :param str identifier: worker-unique identifier for the lock
+
         '''
-        identifier = nice_identifier()
+        if identifier is None:
+            identifier = nice_identifier()
         if self._acquire_lock(identifier, atime, ltime) != identifier:
             raise LockError("could not acquire lock")
         try:
@@ -205,6 +206,31 @@ class Registry(RedisBase):
         finally:
             self._release_lock(identifier)
             self._session_lock_identifier = None
+
+    def read_lock(self):
+        '''Find out who currently owns the namespace global lock.
+
+        This is purely a diagnostic tool.  If you are trying to get
+        the global lock, it is better to just call :meth:`lock`, which
+        will atomically get the lock if possible and retry.
+
+        :return: session identifier of the lock holder, or :const:`None`
+
+        '''
+        return redis.Redis(connection_pool=self.pool).get(self._lock_name)
+
+    def force_clear_lock(self):
+        '''Kick out whoever currently owns the namespace global lock.
+
+        This is intended as purely a last-resort tool.  If another
+        process has managed to get the global lock for a very long time,
+        or if it requested the lock with a long expiration and then
+        crashed, this can make the system functional again.  If the
+        original lock holder is still alive, its session calls may fail
+        with exceptions.
+
+        '''
+        return redis.Redis(connection_pool=self.pool).delete(self._lock_name)
 
     def _encode(self, data):
         '''Redis hash's store strings in the keys and values.  Since we want
@@ -288,9 +314,6 @@ class Registry(RedisBase):
         '''
         if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
-        ## script is evaluated with numkeys=2, so KEYS[1] is lock_name,
-        ## KEYS[2] is dict_name, ARGV[1] is identifier, and ARGV[i>=2]
-        ## are keys, values, and priorities arranged in triples.
         if priorities is None:
             ## set all priorities to zero
             priorities = defaultdict(int)
@@ -299,32 +322,33 @@ class Registry(RedisBase):
             locks = defaultdict(lambda: '')
         if not (expire is None or isinstance(expire, int)):
             raise ProgrammerError('expire must be int or unspecified')
-        script = '''
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             for i = 3, #ARGV, 4  do
                 if ARGV[i+3] ~= 'j:""' then
-                    local curr_lock = redis.call("hget",  KEYS[2] .. "_locks", ARGV[i])                    
+                    local curr_lock = redis.call("hget",  KEYS[4], ARGV[i])
                     if curr_lock and curr_lock ~= ARGV[i+3] then
                         return {-1, ARGV[i], curr_lock, ARGV[i+3]}
                     end
-                    redis.call("hset",  KEYS[2] .. "_locks", ARGV[i], ARGV[i+3])
+                    redis.call("hset",  KEYS[4], ARGV[i], ARGV[i+3])
                 end
             end
             for i = 3, #ARGV, 4  do
                 redis.call("hset",  KEYS[2], ARGV[i], ARGV[i+1])
-                redis.call("zadd",  KEYS[2] .. "keys", ARGV[i+2], ARGV[i])
+                redis.call("zadd",  KEYS[3], ARGV[i+2], ARGV[i])
             end
             if tonumber(ARGV[2]) ~= nil then
                 redis.call("expire", KEYS[2], ARGV[2])
-                redis.call("expire", KEYS[2] .. "keys", ARGV[2])
+                redis.call("expire", KEYS[3], ARGV[2])
             end
             return {1, 0}
         else
             -- ERROR: No longer own the lock
             return {0, 0}
         end
-        '''
+        ''')
         dict_name = self._namespace(dict_name)
         if mapping is None:
             mapping = {}
@@ -336,11 +360,12 @@ class Registry(RedisBase):
             items.append(priorities[key])
             items.append(self._encode(locks[key]))
 
-        conn = redis.Redis(connection_pool=self.pool)
         #logger.debug('update %r %r', dict_name, items)
-        res = conn.eval(script, 2, self._lock_name, dict_name, 
-                        self._session_lock_identifier, expire, 
-                        *items)
+        res = script(keys=[self._lock_name,
+                           dict_name,
+                           dict_name + 'keys',
+                           dict_name + '_locks'],
+                     args=[self._session_lock_identifier, expire] + items)
         if res[0] == 0:
             raise EnvironmentError(
                 'Unable to add items to %s in registry' % dict_name)
@@ -358,22 +383,25 @@ class Registry(RedisBase):
         if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
         ## see comment above for script in update
-        script = '''
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
-            local keys = redis.call('ZRANGE', KEYS[2] .. "keys", 0, -1)
+            local keys = redis.call('ZRANGE', KEYS[2], 0, -1)
             for i, next_key in ipairs(keys) do
-                redis.call("zadd",  KEYS[2] .. "keys", ARGV[2], next_key)
+                redis.call("zadd",  KEYS[2], ARGV[2], next_key)
             end
             return 1
         else
             -- ERROR: No longer own the lock
             return 0
         end
-        '''
+        ''')
         dict_name = self._namespace(dict_name)
-        conn = redis.Redis(connection_pool=self.pool)
-        res = conn.eval(script, 2, self._lock_name, dict_name, self._session_lock_identifier, priority)
+        res = script(keys=[self._lock_name,
+                           dict_name + 'keys'],
+                     args=[self._session_lock_identifier,
+                           priority])
         if not res:
             # We either lost the lock or something else went wrong
             raise EnvironmentError(
@@ -428,8 +456,19 @@ class Registry(RedisBase):
         return res
 
     def len(self, dict_name, priority_min='-inf', priority_max='+inf'):
-        '''returns number of items in dict_name within
-        [priority_min, priority_max]
+        '''Get the number of items in (part of) a dictionary.
+
+        Returns number of items in `dict_name` within
+        [`priority_min`, `priority_max`].  This is similar to
+        ``len(filter(dict_name, priority_min, priority_max))`` but
+        does not actually retrieve the items.
+
+        This is a read-only operation that does not require or
+        honor a session lock.
+
+        :param str dict_name: dictionary name to query
+        :param float priority_min: lowest priority score
+        :param float priority_max: highest priority score
         '''
         dict_name = self._namespace(dict_name)
         conn = redis.Redis(connection_pool=self.pool)
@@ -440,34 +479,47 @@ class Registry(RedisBase):
             new_priority=0,
             lock=None
         ):
-        '''D.getitem_reset() -> (key, value), return some pair that has a
-        priority that satisfies the priority_min/max constraint; but
-        return None if that range is empty.
+        '''Select an item and update its priority score.
 
-        (key, value) stays in the dictionary and is assigned new_priority
+        The item comes from `dict_name`, and has the lowest score at
+        least `priority_min` and at most `priority_max`.  If some item
+        is found, change its score to `new_priority` and return it.
+
+        This runs as a single atomic operation but still requires a
+        session lock.
+
+        :param str dict_name: source dictionary
+        :param float priority_min: lowest score
+        :param float priority_max: highest score
+        :param float new_priority: new score
+        :param str lock: lock value for the item
+        :return: pair of (key, value) if an item was reprioritized, or
+          :const:`None`
+
         '''
         if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
-        ## see comment above for script in update
-        script = '''
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of dict_name
-            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)[1]
+            local next_key, next_priority = redis.call("zrangebyscore",
+                KEYS[3], ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)[1]
 
             if not next_key then
                 return {}
             end
 
             local next_val = redis.call("hget", KEYS[2], next_key)
-            redis.call("zadd", KEYS[2] .. "keys", ARGV[4], next_key)
+            redis.call("zadd", KEYS[3], ARGV[4], next_key)
             if ARGV[5] then
-                redis.call("hset", KEYS[2] .. "_locks", next_key, ARGV[5])
-                redis.call("hset", KEYS[2] .. "_locks", ARGV[5], next_key)
+                redis.call("hset", KEYS[4], next_key, ARGV[5])
+                redis.call("hset", KEYS[4], ARGV[5], next_key)
             else
-                local old_key2 = redis.call("hget", KEYS[2] .. "_locks", next_key)
-                redis.call("hdel", KEYS[2] .. "_locks", next_key)
-                redis.call("hdel", KEYS[2] .. "_locks", old_key2)
+                local old_key2 = redis.call("hget", KEYS[4], next_key)
+                redis.call("hdel", KEYS[4], next_key)
+                redis.call("hdel", KEYS[4], old_key2)
             end
 
             return {next_key, next_val}
@@ -475,17 +527,16 @@ class Registry(RedisBase):
             -- ERROR: No longer own the lock
             return -1
         end
-        '''
+        ''')
         dict_name = self._namespace(dict_name)
-        conn = redis.Redis(connection_pool=self.pool)
-        logger.debug('getitem_reset: %s %s %s',
-                     self._lock_name, self._session_lock_identifier, dict_name)
-        key_value = conn.eval(script, 2, self._lock_name, dict_name, 
-                              self._session_lock_identifier,
-                              priority_min, priority_max,
-                              new_priority,
-                              self._encode(lock),
-                              )
+        key_value = script(keys=[self._lock_name,
+                                 dict_name,
+                                 dict_name + 'keys',
+                                 dict_name + '_locks'],
+                           args=[self._session_lock_identifier,
+                                 priority_min, priority_max,
+                                 new_priority,
+                                 self._encode(lock)])
         if key_value == -1:
             raise KeyError(
                 'Registry failed to return an item from %s' % dict_name)
@@ -496,24 +547,37 @@ class Registry(RedisBase):
         return self._decode(key_value[0]), self._decode(key_value[1])
 
     def popitem(self, dict_name, priority_min='-inf', priority_max='+inf'):
-        '''
-        D.popitem() -> (k, v), remove and return some (key, value) pair as a
-        2-tuple; but raise KeyError if D is empty.
+        '''Select an item and remove it.
+
+        The item comes from `dict_name`, and has the lowest score
+        at least `priority_min` and at most `priority_max`.  If some
+        item is found, remove it from `dict_name` and return it.
+
+        This runs as a single atomic operation but still requires a
+        session lock.
+
+        :param str dict_name: source dictionary
+        :param float priority_min: lowest score
+        :param float priority_max: highest score
+        :return: pair of (key, value) if an item was popped, or
+          :const:`None`
+
         '''
         if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
-        ## see comment above for script in update
-        script = '''
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- remove next item of dict_name
-            local next_key, next_priority = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)[1]
+            local next_key, next_priority = redis.call("zrangebyscore",
+                KEYS[3], ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)[1]
 
             if not next_key then
                 return {}
             end
             
-            redis.call("zrem", KEYS[2] .. "keys", next_key)
+            redis.call("zrem", KEYS[3], next_key)
             local next_val = redis.call("hget", KEYS[2], next_key)
             -- zrem removed it from list, so also remove from hash
             redis.call("hdel", KEYS[2], next_key)
@@ -522,13 +586,14 @@ class Registry(RedisBase):
             -- ERROR: No longer own the lock
             return -1
         end
-        '''
+        ''')
         dict_name = self._namespace(dict_name)
-        conn = redis.Redis(connection_pool=self.pool)
-        key_value = conn.eval(script, 2, self._lock_name, dict_name, 
-                              self._session_lock_identifier,
-                              priority_min, priority_max,
-                              )
+        key_value = script(keys=[self._lock_name,
+                                 dict_name,
+                                 dict_name + "keys"],
+                           args=[self._session_lock_identifier,
+                                 priority_min,
+                                 priority_max])
         if key_value == -1:
             raise KeyError(
                 'Registry failed to return an item from %s' % dict_name)
@@ -538,17 +603,35 @@ class Registry(RedisBase):
 
         return self._decode(key_value[0]), self._decode(key_value[1])
 
-    def popitem_move(self, from_dict, to_dict, priority_min='-inf', priority_max='+inf'):
-        '''
-        Pop an item out of from_dict, store it in to_dict, and return it
+    def popitem_move(self, from_dict, to_dict,
+                     priority_min='-inf', priority_max='+inf'):
+        '''Select an item and move it to another dictionary.
+
+        The item comes from `from_dict`, and has the lowest score
+        at least `priority_min` and at most `priority_max`.  If some
+        item is found, remove it from `from_dict`, add it to `to_dict`,
+        and return it.
+
+        This runs as a single atomic operation but still requires a
+        session lock.
+
+        :param str from_dict: source dictionary
+        :param str to_dict: destination dictionary
+        :param float priority_min: lowest score
+        :param float priority_max: highest score
+        :return: pair of (key, value) if an item was moved, or
+          :const:`None`
+
         '''
         if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
-        script = '''
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             -- find the next key and priority
-            local next_items = redis.call("zrangebyscore", KEYS[2] .. "keys", ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)
+            local next_items = redis.call("zrangebyscore", KEYS[3],
+                ARGV[2], ARGV[3], "WITHSCORES", "LIMIT", 0, 1)
             local next_key = next_items[1]
             local next_priority = next_items[2]
             
@@ -557,38 +640,38 @@ class Registry(RedisBase):
             end
 
             -- remove next item of from_dict
-            redis.call("zrem", KEYS[2] .. "keys", next_key)
+            redis.call("zrem", KEYS[3], next_key)
 
             local next_val = redis.call("hget", KEYS[2], next_key)
             -- zrem removed it from list, so also remove from hash
             redis.call("hdel", KEYS[2], next_key)
 
             -- put it in to_dict
-            redis.call("hset", KEYS[3], next_key, next_val)
-            redis.call("zadd", KEYS[3] .. "keys", next_priority, next_key)
+            redis.call("hset", KEYS[4], next_key, next_val)
+            redis.call("zadd", KEYS[5], next_priority, next_key)
 
             return {next_key, next_val, next_priority}
         else
             -- ERROR: No longer own the lock
             return -1
         end
-        '''
-        conn = redis.Redis(connection_pool=self.pool)
-        key_value = conn.eval(script, 3, self._lock_name, 
-                              self._namespace(from_dict), 
-                              self._namespace(to_dict), 
-                              self._session_lock_identifier,
-                              priority_min, priority_max,
-                              )
+        ''')
+        key_value = script(keys=[self._lock_name, 
+                                 self._namespace(from_dict),
+                                 self._namespace(from_dict) + 'keys',
+                                 self._namespace(to_dict),
+                                 self._namespace(to_dict) + 'keys'],
+                           args=[self._session_lock_identifier,
+                                 priority_min, priority_max])
 
         if key_value == []:
             return None
 
         if None in key_value or key_value == -1:
             raise KeyError(
-                'Registry.popitem_move(%r, %r) --> %r' % (from_dict, to_dict, key_value))
+                'Registry.popitem_move(%r, %r) --> %r' %
+                (from_dict, to_dict, key_value))
 
-        logger.debug('Registry.popitem_move(%r, %r) --> %r', from_dict, to_dict, key_value)
         return self._decode(key_value[0]), self._decode(key_value[1])
 
     def move(self, from_dict, to_dict, mapping, priority=None):
@@ -668,27 +751,35 @@ class Registry(RedisBase):
 
 
     def move_all(self, from_dict, to_dict):
-        '''
-        move all items out of from_dict and update them in to_dict
+        '''Move everything from one dictionary to another.
+
+        This can be expensive if the source dictionary is large.
+
+        This always requires a session lock.
+
+        :param str from_dict: source dictionary
+        :param str to_dict: destination dictionary
+
         '''
         if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
-        script = '''
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             local count = 0
-            local keys = redis.call('ZRANGE', KEYS[2] .. "keys", 0, -1)
+            local keys = redis.call('ZRANGE', KEYS[3], 0, -1)
             for i, next_key in ipairs(keys) do
                 -- get the value and priority for this key
                 local next_val = redis.call("hget", KEYS[2], next_key)
-                local next_priority = redis.call("zscore", KEYS[2] .. "keys", next_key)
+                local next_priority = redis.call("zscore", KEYS[3], next_key)
                 -- remove item of from_dict
-                redis.call("zrem", KEYS[2] .. "keys", next_key)
+                redis.call("zrem", KEYS[3], next_key)
                 -- also remove from hash
                 redis.call("hdel", KEYS[2], next_key)
                 -- put it in to_dict
-                redis.call("hset",  KEYS[3], next_key, next_val)
-                redis.call("zadd", KEYS[3] .. "keys", next_priority, next_key)
+                redis.call("hset",  KEYS[4], next_key, next_val)
+                redis.call("zadd", KEYS[5], next_priority, next_key)
                 count = count + 1
             end
             return count
@@ -696,13 +787,13 @@ class Registry(RedisBase):
             -- ERROR: No longer own the lock
             return 0
         end
-        '''
-        conn = redis.Redis(connection_pool=self.pool)
-
-        num_moved = conn.eval(script, 3, self._lock_name, 
-                              self._namespace(from_dict), 
-                              self._namespace(to_dict), 
-                              self._session_lock_identifier)
+        ''')
+        num_moved = script(keys=[self._lock_name,
+                                 self._namespace(from_dict), 
+                                 self._namespace(from_dict) + 'keys',
+                                 self._namespace(to_dict),
+                                 self._namespace(to_dict) + 'keys'],
+                           args=[self._session_lock_identifier])
         return num_moved
 
 
@@ -761,8 +852,7 @@ class Registry(RedisBase):
         '''
         conn = redis.Redis(connection_pool=self.pool)
         script = conn.register_script('''
-        local lock_holder = redis.call("get", KEYS[1])
-        if (not lock_holder) or (lock_holder == ARGV[1])
+        if (ARGV[1] == "") or (redis.call("get", KEYS[1]) == ARGV[1])
         then
             -- find all the keys and priorities within range
             local next_keys = redis.call("zrangebyscore", KEYS[3],
@@ -790,7 +880,7 @@ class Registry(RedisBase):
         res = script(keys=[self._lock_name,
                            self._namespace(dict_name),
                            self._namespace(dict_name) + 'keys'],
-                     args=[self._session_lock_identifier,
+                     args=[self._session_lock_identifier or '',
                            priority_min, priority_max, start, limit])
         if res == -1:
             raise LockError()
@@ -800,11 +890,22 @@ class Registry(RedisBase):
         return split_res
 
     def set_1to1(self, dict_name, key1, key2):
-        '''set two keys to be equal in a 1-to-1 mapping.
+        '''Set two keys to be equal in a 1-to-1 mapping.
+
+        Within `dict_name`, `key1` is set to `key2`, and `key2` is set
+        to `key1`.
+
+        This always requires a session lock.
+
+        :param str dict_name: dictionary to update
+        :param str key1: first key/value
+        :param str key2: second key/value
+
         '''
         if self._session_lock_identifier is None:
             raise ProgrammerError('must acquire lock first')
-        script = '''
+        conn = redis.Redis(connection_pool=self.pool)
+        script = conn.register_script('''
         if redis.call("get", KEYS[1]) == ARGV[1]
         then
             redis.call("hset", KEYS[2], ARGV[2], ARGV[3])
@@ -813,14 +914,12 @@ class Registry(RedisBase):
             -- ERROR: No longer own the lock
             return -1
         end
-        '''
-        conn = redis.Redis(connection_pool=self.pool)
-        res = conn.eval(script, 2, self._lock_name, 
-                        self._namespace(dict_name), 
-                        self._session_lock_identifier,
-                        self._encode(key1),
-                        self._encode(key2),
-        )
+        ''')
+        res = script(keys=[self._lock_name,
+                           self._namespace(dict_name)],
+                     args=[self._session_lock_identifier,
+                           self._encode(key1),
+                           self._encode(key2)])
         if res == -1:
             raise EnvironmentError()
 
@@ -857,8 +956,15 @@ class Registry(RedisBase):
         return _val
 
     def set(self, dict_name, key, value, priority=None):
-        '''
-        set value for key
+        '''Set a single value for a single key.
+
+        This requires a session lock.
+
+        :param str dict_name: name of the dictionary to update
+        :param str key: key to update
+        :param str value: value to assign to `key`
+        :param int priority: priority score for the value (if any)
+
         '''
         if priority is not None:
             priorities = {key: priority}

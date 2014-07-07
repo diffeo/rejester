@@ -11,7 +11,7 @@ import time
 import pytest
 
 import rejester
-from rejester.exceptions import EnvironmentError
+from rejester.exceptions import EnvironmentError, LockError
 
 logger = logging.getLogger(__name__)
 pytest_plugins = 'rejester.tests.fixtures'
@@ -29,27 +29,27 @@ def test_registry_lock_block(registry):
                 pass
 
 
-def test_registry_lock_loss(registry):
-    with pytest.raises(EnvironmentError) as env_error:
+def test_registry_lock_loss(registry, registry2):
+    with pytest.raises(LockError) as env_error:
         with registry.lock(ltime=1) as session1:
             ## check that we can get the lock
-            with registry.lock(atime=100) as session2:
+            with registry2.lock(atime=100) as session2:
                 assert session2
-    assert 'Lost lock' in str(env_error)
+            ## now try to do anything with the expired session
+            session1.filter('x')
 
 
-def test_registry_re_acquire_lock(registry):
-    with pytest.raises(EnvironmentError) as env_error:
-        with registry.lock(ltime=1000) as session:
-            ## lower the ltime
-            assert session.re_acquire_lock(ltime=1)
-            ## capture it with atime so short it couldn't happen if
-            ## ltime were not reset
-            with registry.lock(atime=10) as session2:
-                assert session2
-            ## verify that re_acquire_lock fails
-            with pytest.raises(EnvironmentError):
-                session.re_acquire_lock()        
+def test_registry_re_acquire_lock(registry, registry2):
+    with registry.lock(ltime=1000) as session:
+        ## lower the ltime
+        assert session.re_acquire_lock(ltime=1)
+        ## capture it with atime so short it couldn't happen if
+        ## ltime were not reset
+        with registry2.lock(atime=10) as session2:
+            assert session2
+        ## verify that re_acquire_lock fails
+        with pytest.raises(EnvironmentError):
+            session.re_acquire_lock()
 
 
 def test_registry_update_pull(registry):

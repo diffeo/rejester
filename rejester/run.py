@@ -150,23 +150,19 @@ given on the command line.  The tool provides the following commands:
 
     Get a single task, and run it.
 
+.. describe:: global_lock [--purge]
+
+    The system maintains a global lock to make sequences of database
+    requests atomic, but if workers fail, the global lock can be leaked.
+    With no arguments, prints the worker ID that owns the global lock
+    and details that are known about it.  If ``-p`` or ``--purge`` is
+    given, clear out the lock if anybody holds it.
+
 .. describe:: workers
 
     List all of the known workers.  With ``--all`` include workers
     that haven't checked in recently.  With ``--details`` include all
     known details.
-
-.. describe:: run_worker [--pidfile /path/to/file.pid] [--logpath /path/to/file.log]
-
-    Start a worker as a background task.  This should generally not be
-    run from the interactive shell.  If ``--pidfile`` is specified,
-    the process ID of the worker is written to the named file, which
-    must be an absolute path.  If ``--logpath`` is specified, log
-    messages from the worker will be written to the specified file,
-    which again must be an absolute path; this is in addition to any
-    logging specified in the configuration file.  The worker may be
-    shut down by globally switching to ``mode terminate``, or by
-    ``kill $(cat /path/to/file.pid)``.
 
 '''
 from __future__ import absolute_import
@@ -533,6 +529,25 @@ class Manager(ArgParseCmd):
         else:
             mode = self.task_master.get_mode()
             self.stdout.write('{!s}\n'.format(mode))
+
+    def args_global_lock(self, parser):
+        parser.add_argument('--purge', '-p', action='store_true',
+                            help='forcibly clear the lock')
+    def do_global_lock(self, args):
+        '''read (or clear) the global lock'''
+        if args.purge:
+            self.task_master.registry.force_clear_lock()
+        else:
+            owner = self.task_master.registry.read_lock()
+            if owner:
+                heartbeat = self.task_master.get_heartbeat(owner)
+                if 'hostname' in heartbeat:
+                    self.stdout.write('{} ({})\n'.format(owner,
+                                                         heartbeat['hostname']))
+                else:
+                    self.stdout.write('{}\n'.format(owner))
+            else:
+                self.stdout.write('(unlocked)\n')
 
     def args_workers(self, parser):
         parser.add_argument('--all', action='store_true',

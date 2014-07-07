@@ -108,6 +108,11 @@ def registry(request, _rejester_config, namespace_string):
     return _then_delete_namespace(request, registry)
 
 @pytest.fixture(scope='function')
+def registry2(registry):
+    '''A second copy of :func:`registry`.'''
+    return Registry(registry.config)
+
+@pytest.fixture(scope='function')
 def task_master(request, _rejester_config, namespace_string):
     """A rejester TaskMaster for loading or querying work.
 
