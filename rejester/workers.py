@@ -432,6 +432,8 @@ class ForkWorker(Worker):
             poll_interval: 1
             # how often to start more workers
             spawn_interval: 0.01
+            # how often to record our existence
+            heartbeat_interval: 15
 
     This spawns child processes to do work.  Each child process does at
     most one work unit.  If `num_workers` is set, at most this many
@@ -458,8 +460,9 @@ class ForkWorker(Worker):
     maximum number of processes immediately, each of which will
     connect to Redis.  If the system runs out of work, or if it starts
     all of its workers, it will check for work or system shutdown
-    every `poll_interval`.  This latter check is fairly lightweight
-    but does involve contacting the Redis server.
+    every `poll_interval`.  The parent worker will contact Redis,
+    recording its state and retrieving the global mode, every
+    `heartbeat_interval`.
 
     .. todo:: This should become the default process-level worker,
               replacing :class:`MultiWorker`.
@@ -491,6 +494,7 @@ class ForkWorker(Worker):
         'num_workers_per_core': 1,
         'poll_interval': 1,
         'spawn_interval': 0.01,
+        'heartbeat_interval': 15,
         'debug_worker': None,
     }
     @classmethod
@@ -521,6 +525,8 @@ class ForkWorker(Worker):
             self.num_workers = num_workers_per_core * num_cores
         self.poll_interval = self.config_get(c, 'poll_interval')
         self.spawn_interval = self.config_get(c, 'spawn_interval')
+        self.heartbeat_interval = self.config_get(c, 'heartbeat_interval')
+        self.heartbeat_deadline = time.time() - 1 # due now
         self.debug_worker = c.get('debug_worker', [])
         self.children = set()
         self.log_child = None
@@ -830,11 +836,16 @@ class ForkWorker(Worker):
             self.start_log_child()
             while True:
                 can_start_more = not self.shutting_down
-                mode = self.heartbeat()
-                if mode != self.last_mode:
-                    self.log(logging.INFO,
-                             'rejester global mode is {!r}'.format(mode))
-                    self.last_mode = mode
+                if time.time() >= self.heartbeat_deadline:
+                    mode = self.heartbeat()
+                    if mode != self.last_mode:
+                        self.log(logging.INFO,
+                                 'rejester global mode is {!r}'.format(mode))
+                        self.last_mode = mode
+                    self.heartbeat_deadline = (time.time() +
+                                               self.heartbeat_interval)
+                else:
+                    mode = self.last_mode
                 if mode != TaskMaster.RUN:
                     can_start_more = False
                 interval = self.do_some_work(can_start_more)
