@@ -385,6 +385,7 @@ class SingleWorker(Worker):
         '''
         try:
             setproctitle('rejester worker')
+            random.seed()  # otherwise everyone inherits the same seed
             yakonfig.set_default_config([yakonfig, dblogger, rejester],
                                         config=global_config)
             worker = cls(yakonfig.get_global_config(rejester.config_name))
@@ -428,7 +429,7 @@ class ForkWorker(Worker):
             # set this or num_workers; num_workers takes precedence
             num_workers_per_core: 1
             # how often to check if there is more work
-            poll_interval: 5
+            poll_interval: 1
             # how often to start more workers
             spawn_interval: 0.01
 
@@ -452,9 +453,13 @@ class ForkWorker(Worker):
 
     This means that if the system is operating normally, and there is
     work to do, then it will start all of its workers in `num_workers`
-    times `spawn_interval` time.  If the system runs out of work, or
-    if it starts all of its workers, it will check for work or system
-    shutdown every `poll_interval`.
+    times `spawn_interval` time.  If `spawn_interval` is 0, then any
+    time the system thinks it may have work to do, it will spawn the
+    maximum number of processes immediately, each of which will
+    connect to Redis.  If the system runs out of work, or if it starts
+    all of its workers, it will check for work or system shutdown
+    every `poll_interval`.  This latter check is fairly lightweight
+    but does involve contacting the Redis server.
 
     .. todo:: This should become the default process-level worker,
               replacing :class:`MultiWorker`.
@@ -484,7 +489,7 @@ class ForkWorker(Worker):
     default_config = {
         'num_workers': None,
         'num_workers_per_core': 1,
-        'poll_interval': 5,
+        'poll_interval': 1,
         'spawn_interval': 0.01,
         'debug_worker': None,
     }
