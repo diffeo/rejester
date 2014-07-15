@@ -624,6 +624,9 @@ def test_run_worker_minimal(manager, tmpdir, global_config):
     pidfile = str(tmpdir.join('pid'))
     logfile = str(tmpdir.join('log'))
     cfgfile = str(tmpdir.join('config.yaml'))
+    global_config['rejester']['fork_worker'] = {
+        'heartbeat_interval': 1,
+    }
     with open(cfgfile, 'w') as f:
         f.write(yaml.dump(global_config))        
     
@@ -647,7 +650,7 @@ def test_run_worker_minimal(manager, tmpdir, global_config):
     # Attempt a clean shutdown
     try:
         manager.runcmd('mode', ['terminate'])
-        for i in xrange(60): # checks every 1-5 seconds
+        for i in xrange(600): # checks every 1-5 seconds
             try:
                 os.kill(pid, 0)
             except OSError, e:

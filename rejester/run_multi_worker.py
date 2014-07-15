@@ -1,5 +1,5 @@
 '''Command-line :mod:`rejester_worker` tool for launching the
-MultiWorker daemon.
+worker daemon.
 
 .. This software is released under an MIT/X11 open source license.
    Copyright 2012-2014 Diffeo, Inc.
@@ -90,23 +90,23 @@ def start_worker(which_worker, config={}):
         cls = ForkWorker
     else:
         # Don't complain too hard, just fall back
-        cls = MultiWorker
+        cls = ForkWorker
     return run_worker(cls, config)
 
 def go(gconfig, args):
     '''Actually run the worker.
 
     This does some required housekeeping, like setting up logging for
-    the default :class:`~rejester.workers.MultiWorker` and establishing
-    the global :mod:`yakonfig` configuration.  This expects to be called
-    with the :mod:`yakonfig` configuration unset.
+    :class:`~rejester.workers.MultiWorker` and establishing the global
+    :mod:`yakonfig` configuration.  This expects to be called with the
+    :mod:`yakonfig` configuration unset.
 
     :param dict gconfig: the :mod:`yakonfig` global configuration
     :param args: command-line arguments
 
     '''
     rconfig = gconfig['rejester']
-    which_worker = rconfig.get('worker', 'multi_worker')
+    which_worker = rconfig.get('worker', 'fork_worker')
     if which_worker == 'fork_worker':
         yakonfig.set_default_config([rejester], config=gconfig)
     else:
