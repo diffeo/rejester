@@ -855,6 +855,31 @@ class TaskMaster(object):
         return self.registry.filter(WORK_UNITS_ + work_spec_name + _FAILED,
                                     start=start, limit=limit)
 
+    def _remove_some_work_units(self, work_spec_name, work_unit_names,
+                                suffix='', priority_min='-inf',
+                                priority_max='+inf'):
+        '''Remove some units from somewhere.'''
+        now = time.time()
+        if work_unit_names is None:
+            count = 0
+            while True:
+                with self.registry.lock(identifier=self.worker_id) as session:
+                    names = session.filter(
+                        WORK_UNITS_ + work_spec_name + suffix,
+                        priority_min=priority_min, priority_max=priority_max,
+                        limit=1000)
+                    if not names: break
+                    count += session.popmany(
+                        WORK_UNITS_ + work_spec_name + suffix, *names)
+        else:
+            # TODO: This needs to honor priority_min/priority_max,
+            # otherwise it gets the wrong answer for "available"/
+            # "pending" (it will get both states).
+            with self.registry.lock(identifier=self.worker_id) as session:
+                count = session.popmany(WORK_UNITS_ + work_spec_name + suffix,
+                                        *work_unit_names)
+        return count
+
     def remove_available_work_units(self, work_spec_name, work_unit_names):
         '''Remove some work units in the available queue.
 
@@ -868,22 +893,8 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock(identifier=self.worker_id) as session:
-            now = time.time()
-            if work_unit_names is None:
-                count = 0
-                while True:
-                    names = session.filter(WORK_UNITS_ + work_spec_name,
-                                           priority_max=now, limit=1000)
-                    if not names: break
-                    count += session.popmany(WORK_UNITS_ + work_spec_name,
-                                             *names)
-            else:
-                # TODO: this will remove "pending" units too, but the
-                # check for it is a little annoying
-                count = session.popmany(WORK_UNITS_ + work_spec_name,
-                                        *work_unit_names)
-            return count
+        return self._remove_some_work_units(
+            work_spec_name, work_unit_names, priority_max=time.time())
 
     def remove_pending_work_units(self, work_spec_name, work_unit_names):
         '''Remove some work units in the pending list.
@@ -905,22 +916,8 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock(identifier=self.worker_id) as session:
-            now = time.time()
-            if work_unit_names is None:
-                count = 0
-                while True:
-                    names = session.filter(WORK_UNITS_ + work_spec_name,
-                                           priority_min=now, limit=1000)
-                    if not names: break
-                    count += session.popmany(WORK_UNITS_ + work_spec_name,
-                                             *names)
-            else:
-                # TODO: this will remove "available" units too, but the
-                # check for it is a little annoying
-                count = session.popmany(WORK_UNITS_ + work_spec_name,
-                                        *work_unit_names)
-            return count
+        return self._remove_some_work_units(
+            work_spec_name, work_unit_names, priority_min=time.time())
 
     def remove_blocked_work_units(self, work_spec_name, work_unit_names):
         '''Remove some work units in the blocked list.
@@ -940,19 +937,8 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock(identifier=self.worker_id) as session:
-            if work_unit_names is None:
-                count = 0
-                while True:
-                    names = session.filter(
-                        WORK_UNITS_ + work_spec_name + _BLOCKED, limit=1000)
-                    if not names: break
-                    count += session.popmany(
-                        WORK_UNITS_ + work_spec_name + _BLOCKED, *names)
-            else:
-                count = session.popmany(
-                    WORK_UNITS_ + work_spec_name + _BLOCKED, *work_unit_names)
-            return count
+        return self._remove_some_work_units(
+            work_spec_name, work_unit_names, suffix=_BLOCKED)
 
     def remove_failed_work_units(self, work_spec_name, work_unit_names):
         '''Remove some failed work units.
@@ -970,19 +956,8 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock(identifier=self.worker_id) as session:
-            if work_unit_names is None:
-                count = 0
-                while True:
-                    names = session.filter(
-                        WORK_UNITS_ + work_spec_name + _FAILED, limit=1000)
-                    if not names: break
-                    count += session.popmany(
-                        WORK_UNITS_ + work_spec_name + _FAILED, *names)
-            else:
-                count = session.popmany(
-                    WORK_UNITS_ + work_spec_name + _FAILED, *work_unit_names)
-            return count
+        return self._remove_some_work_units(
+            work_spec_name, work_unit_names, suffix=_FAILED)
 
     def remove_finished_work_units(self, work_spec_name, work_unit_names):
         '''Remove some finished work units.
@@ -997,19 +972,8 @@ class TaskMaster(object):
         :return: number of work units removed
 
         '''
-        with self.registry.lock(identifier=self.worker_id) as session:
-            if work_unit_names is None:
-                count = 0
-                while True:
-                    names = session.filter(
-                        WORK_UNITS_ + work_spec_name + _FINISHED, limit=1000)
-                    if not names: break
-                    count += session.popmany(
-                        WORK_UNITS_ + work_spec_name + _FINISHED, *names)
-            else:
-                count = session.popmany(
-                    WORK_UNITS_ + work_spec_name + _FINISHED, *work_unit_names)
-            return count
+        return self._remove_some_work_units(
+            work_spec_name, work_unit_names, suffix=_FINISHED)
 
     def get_work_unit_status(self, work_spec_name, work_unit_key):
         '''Get a high-level status for some work unit.
