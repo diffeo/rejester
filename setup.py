@@ -90,7 +90,6 @@ class PyTest(Command):
 setup(
     name=PROJECT,
     version=VERSION,
-    source_label=SOURCE_LABEL,
     description=DESC,
     license=LICENSE,
     long_description=read_file('README.md'),
