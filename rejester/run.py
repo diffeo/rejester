@@ -372,7 +372,13 @@ class Manager(ArgParseCmd):
         if args.limit: work_unit_names = work_unit_names[:args.limit]
         for k in work_unit_names:
             if args.details:
-                self.stdout.write('{!r}: {!r}\n'.format(k, work_units[k]))
+                tback = work_units[k].get('traceback', '')
+                if tback:
+                    tback += '\n'
+                    work_units[k]['traceback'] = 'displayed below'
+                self.stdout.write('{!r}: {}\n{}'
+                    .format(k, json.dumps(work_units[k], indent=4, sort_keys=True),
+                            tback))
             else:
                 self.stdout.write('{}\n'.format(k))
 
