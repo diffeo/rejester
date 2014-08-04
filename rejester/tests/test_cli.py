@@ -1,8 +1,7 @@
 '''Tests for the 'rejester' command-line tool.
 
-This software is released under an MIT/X11 open source license.
-
-Copyright 2012-2014 Diffeo, Inc.
+.. This software is released under an MIT/X11 open source license.
+   Copyright 2012-2014 Diffeo, Inc.
 '''
 from __future__ import absolute_import
 from cStringIO import StringIO
@@ -248,15 +247,23 @@ def test_work_units_names(manager, loaded, work_spec, work_units):
 def test_work_units_details(manager, loaded, work_spec, work_units):
     manager.runcmd('work_units', ['-W', work_spec['name'], '--details'])
     response = manager.stdout.getvalue()
-    found = set()
+    work_units_json = list()
+    work_unit_str = ''
+    capturing = False
     for line in response.strip().split('\n'):
-        k,v = line.split(': ', 1)
-        assert k.startswith("u'")
-        assert k.endswith("'")
-        key = k[2:-1]
-        assert key in work_units
-        # We should check the right-hand side of this too, but there
-        # is some ickiness around Unicode round-tripping
+        if line.startswith("u'"):
+            line = '{' + line[1:].replace("'", '"')
+            capturing = True
+        if capturing:
+            work_unit_str += line
+        if line.startswith("}"):
+            capturing = False
+            work_unit_str += '}'
+            work_units_json.append(json.loads(work_unit_str))
+            work_unit_str = ''
+    found = set()
+    for work_unit in work_units_json:
+        key = work_unit.keys()[0]
         found.add(key)
     assert sorted(found) == sorted(work_units.keys())
 
