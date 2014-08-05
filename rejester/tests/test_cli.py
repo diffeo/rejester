@@ -25,6 +25,15 @@ import yakonfig
 
 logger = logging.getLogger(__name__)
 
+def test_config_from_env(redis_address, monkeypatch, namespace_string):
+    host, port = redis_address.split(':', 2)
+    monkeypatch.setenv('REDIS_PORT_6379_TCP_ADDR', host)
+    monkeypatch.setenv('REDIS_PORT_6379_TCP_PORT', port)
+    with yakonfig.defaulted_config(
+            [rejester],
+            config={'rejester': {'namespace': namespace_string}}):
+        pass  # should not throw a configuration error
+
 @pytest.yield_fixture
 def global_config(_rejester_config):
     with yakonfig.defaulted_config([rejester],

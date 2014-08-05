@@ -20,7 +20,7 @@ principal way to start a worker process to run jobs.  Typical use is:
 2. Run some process to generate rejester tasks.
 
 3. Copy the configuration files to other systems as required, and
-   run ``rejester -c config.yaml run_worker`` to start workers.
+   run ``rejester_worker -c config.yaml`` to start workers.
 
 4. Run (anywhere, but only once) ``rejester -c config.yaml mode run``
    to actually start execution.
@@ -29,6 +29,14 @@ principal way to start a worker process to run jobs.  Typical use is:
 
 6. Run (anywhere, but only once) ``rejester -c config.yaml mode terminate``
    to ask the workers to shut down.
+
+In the configuration, ``namespace`` and ``registry_addresses`` are
+required unless passed on the command line.  Additionally,
+``registry_addresses`` can be detected from environment variables
+``REDIS_PORT_6379_TCP_ADDR`` and ``REDIS_PORT_6379_TCP_PORT``,
+which will be set by `Docker <http://www.docker.com/>`_ if a
+rejester program is run in a container that is ``--link`` connected
+to another container with the name ``redis``.
 
 .. program:: rejester
 

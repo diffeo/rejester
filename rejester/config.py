@@ -4,6 +4,7 @@
    Copyright 2012-2014 Diffeo, Inc.
 '''
 from __future__ import absolute_import
+import os
 import yakonfig
 
 config_name = 'rejester'
@@ -27,6 +28,13 @@ runtime_keys = {
     'registry_addresses': 'registry_addresses',
     'namespace': 'namespace',
 }
+
+def discover_config(config, name):
+    if 'registry_addresses' not in config:
+        addr = os.environ.get('REDIS_PORT_6379_TCP_ADDR', None)
+        port = os.environ.get('REDIS_PORT_6379_TCP_PORT', None)
+        if addr and port:
+            config['registry_addresses'] = [addr + ':' + port]
 
 def check_config(config, name):
     for k in ['registry_addresses', 'app_name', 'namespace']:
