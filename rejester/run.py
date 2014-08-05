@@ -269,6 +269,8 @@ class Manager(ArgParseCmd):
 
     def args_load(self, parser):
         self._add_work_spec_args(parser)
+        parser.add_argument('-n', '--nice', default=0, type=int, 
+                            help='specify a nice level for these jobs')
         parser.add_argument('-u', '--work-units', metavar='FILE',
                             dest='work_units_path', required=True,
                             type=existing_path_or_minus,
@@ -289,7 +291,7 @@ class Manager(ArgParseCmd):
             work_unit = json.loads(line)
             work_units.update(work_unit)
         self.stdout.write('pushing work units\n')
-        self.task_master.update_bundle(work_spec, work_units)
+        self.task_master.update_bundle(work_spec, work_units, nice=args.nice)
         self.stdout.write('finished writing {} work units to work_spec={!r}\n'
                           .format(len(work_units), work_spec['name']))
 

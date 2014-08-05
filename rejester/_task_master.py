@@ -64,7 +64,7 @@ class Worker(object):
         #: Worker ID, only valid after :meth:`register`
         self.worker_id = None
         #: Required maximum time between :meth:`heartbeat`
-        self.lifetime = 300 ## five minutes
+        self.lifetime = 300 * 20 ## 100 minutes
 
     def environment(self):
         '''Get raw data about this worker.
