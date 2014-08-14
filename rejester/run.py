@@ -188,7 +188,7 @@ import yaml
 import dblogger
 import rejester
 from rejester.exceptions import NoSuchWorkSpecError, NoSuchWorkUnitError
-from rejester._task_master import TaskMaster
+from rejester._task_master import build_task_master
 from rejester.workers import SingleWorker
 import yakonfig
 from yakonfig.cmd import ArgParseCmd
@@ -239,7 +239,7 @@ class Manager(ArgParseCmd):
     def task_master(self):
         """A `TaskMaster` object for manipulating work"""
         if self._task_master is None:
-            self._task_master = TaskMaster(self.config)
+            self._task_master = build_task_master(self.config)
         return self._task_master
 
     def _add_work_spec_args(self, parser):
@@ -295,11 +295,19 @@ class Manager(ArgParseCmd):
         self.stdout.write('loading work units from {!r}\n'
                           .format(work_units_fh))
         work_units = dict()
+        count = 0
         for line in work_units_fh:
-            work_unit = json.loads(line)
-            work_units.update(work_unit)
+            try:
+                count += 1
+                work_unit = json.loads(line)
+                work_units.update(work_unit)
+            except:
+                logger.error('failed handling work_unit on line %s: %r', count, line, exc_info=True)
+                raise
         self.stdout.write('pushing work units\n')
-        self.task_master.update_bundle(work_spec, work_units, nice=args.nice)
+        work_spec['nice'] = args.nice
+        self.task_master.set_work_spec(work_spec)
+        self.task_master.add_work_units(work_spec['name'], work_units.items())
         self.stdout.write('finished writing {} work units to work_spec={!r}\n'
                           .format(len(work_units), work_spec['name']))
 
@@ -324,7 +332,9 @@ class Manager(ArgParseCmd):
         pass
     def do_work_specs(self, args):
         '''print the names of all of the work specs'''
-        for name in sorted(self.task_master.list_work_specs().keys()):
+        work_spec_names = [x['name'] for x in self.task_master.iter_work_specs()]
+        work_spec_names.sort()
+        for name in work_spec_names:
             self.stdout.write('{}\n'.format(name))
 
     def args_work_spec(self, parser):
@@ -351,7 +361,8 @@ class Manager(ArgParseCmd):
                           '   Failed Finished    Total\n')
         self.stdout.write('==================== ======== ======== ========'
                           ' ======== ======== ========\n')
-        for name in sorted(self.task_master.list_work_specs().keys()):
+        for ws in self.task_master.iter_work_specs():
+            name = ws['name']
             status = self.task_master.status(name)
             self.stdout.write('{0:20s} {1[num_available]:8d} '
                               '{1[num_pending]:8d} {1[num_blocked]:8d} '
@@ -584,7 +595,7 @@ class Manager(ArgParseCmd):
         pass
     def do_run_one(self, args):
         '''run a single job'''
-        worker = SingleWorker(self.config)
+        worker = SingleWorker(self.config, task_master=self.task_master)
         worker.register()
         rc = False
         try:

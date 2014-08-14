@@ -35,6 +35,19 @@ WORKER_STATE_ = 'WORKER_STATE_'
 WORKER_OBSERVED_MODE = 'WORKER_OBSERVED_MODE'
 ACTIVE_LEASES = 'ACTIVE_LEASES'
 
+def build_task_master(config):
+    tm_factory_module_name = config.get('task_master_module')
+    if tm_factory_module_name is not None:
+        import importlib
+        tm_factory_module = importlib.import_module(tm_factory_module_name)
+        tm_factory_clasname = config.get('task_master_class')
+        assert tm_factory_clasname, 'task_master_module set but not task_master_class'
+        _task_master_factory = getattr(tm_factory_module, tm_factory_clasname)
+        return _task_master_factory(config)
+    # by default use implementation later in this file
+    return TaskMaster(config)
+
+
 class Worker(object):
     '''Process that runs rejester jobs.
 
@@ -50,7 +63,7 @@ class Worker(object):
 
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, config):
+    def __init__(self, config, task_master=None):
         '''Create a new worker.
 
         :param dict config: Configuration for the worker, typically
@@ -60,7 +73,9 @@ class Worker(object):
         #: Configuration for the worker
         self.config = config
         #: Task interface to talk to the data store
-        self.task_master = TaskMaster(config)
+        self.task_master = task_master
+        if self.task_master is None:
+            self.task_master = build_task_master(self.config)
         #: Worker ID, only valid after :meth:`register`
         self.worker_id = None
         #: Required maximum time between :meth:`heartbeat`
@@ -111,10 +126,7 @@ class Worker(object):
         This requires the worker to already have been :meth:`register()`.
 
         ''' 
-        with self.task_master.registry.lock(
-                identifier=self.worker_id) as session:
-            session.delete(WORKER_STATE_ + self.worker_id)
-            session.popmany(WORKER_OBSERVED_MODE, self.worker_id)
+        self.task_master.worker_unregister(self.worker_id)
         self.task_master.worker_id = None
         self.worker_id = None
 
@@ -128,12 +140,7 @@ class Worker(object):
 
         ''' 
         mode = self.task_master.get_mode()
-        with self.task_master.registry.lock(
-                identifier=self.worker_id) as session:
-            session.set(WORKER_OBSERVED_MODE, self.worker_id, mode,
-                        priority=time.time() + self.lifetime)
-            session.update(WORKER_STATE_ + self.worker_id, self.environment(), 
-                           expire=self.lifetime)
+        self.task_master.worker_heartbeat(self.worker_id, mode, self.lifetime, self.environment())
         return mode
 
     @abc.abstractmethod
@@ -770,14 +777,34 @@ class TaskMaster(object):
             num_tasks=self.num_tasks(work_spec_name),
             )
 
-    def list_work_specs(self):
-        '''Get the dictionary of work specs.
+    def list_work_specs(self, limit=None, start=None):
+        '''Get the list of [(work spec name, work spec), ...]
 
         The keys are the work spec names; the values are the actual
         work spec definitions.
 
+        return [(spec name, spec), ...], next start value
+
         '''
-        return self.registry.pull(WORK_SPECS)
+        return self.registry.pull(WORK_SPECS).items(), None
+
+    def iter_work_specs(self, limit=None, start=None):
+        '''
+        yield work spec dicts
+        '''
+        count = 0
+        ws_list, start = self.list_work_specs(limit, start)
+        while True:
+            for name_spec in ws_list:
+                yield name_spec[1]
+                count += 1
+                if (limit is not None) and (count >= limit):
+                    break
+            if not start:
+                break
+            if limit is not None:
+                limit -= count
+            ws_list, start = self.list_work_specs(limit, start)
 
     def get_work_spec(self, work_spec_name):
         '''Get the dictionary defining some work spec.'''
@@ -1124,6 +1151,31 @@ class TaskMaster(object):
                 session.update(WORK_UNITS_ + work_spec_name, 
                                dict(work_units[i: i + window_size]))
 
+    def set_work_spec(self, work_spec):
+        '''
+        work_spec is a dict()
+        work_spec['name'] is used as work_spec_name in other API calls
+        work_spec['nice'] is used for prioritization, if set.
+        '''
+        self.validate_work_spec(work_spec)
+
+        nice = int(work_spec.get('nice', 0))
+        work_spec_name = work_spec['name']
+        with self.registry.lock(identifier=self.worker_id) as session:
+            session.update(NICE_LEVELS, {work_spec_name: nice})
+            session.update(WORK_SPECS,  {work_spec_name: work_spec})
+
+    def add_work_units(self, work_spec_name, work_unit_key_vals):
+        '''
+        work_unit_key_vals list of (work_unit_key, work_unit_data)
+        '''
+        with self.registry.lock(identifier=self.worker_id) as session:
+            window_size = 10**4
+            for i in xrange(0, len(work_unit_key_vals), window_size):
+                self.registry.re_acquire_lock()
+                session.update(WORK_UNITS_ + work_spec_name,
+                               dict(work_unit_key_vals[i: i + window_size]))
+
     def add_dependent_work_units(self, work_unit, depends_on, hard=True):
         """Add work units, where one prevents execution of the other.
 
@@ -1297,7 +1349,7 @@ class TaskMaster(object):
                          units,
                          priority=0)
 
-    def nice(self, work_spec_name, nice):        
+    def nice(self, work_spec_name, nice):
         '''Change the priority of an existing work spec.'''
         with self.registry.lock(identifier=self.worker_id) as session:
             session.update(NICE_LEVELS, dict(work_spec_name=nice))
@@ -1399,3 +1451,22 @@ class TaskMaster(object):
                 work_unit_key, work_unit_data,
                 worker_id=worker_id,                            
             )
+
+    def worker_register(self, worker_id, mode=None, lifetime=6000, environment=None):
+        # actually the same as heartbeat, just, "hello, I'm here"
+        self.worker_heartbeat(worker_id, mode, lifetime, environment)
+
+    def worker_heartbeat(self, worker_id, mode=None, lifetime=6000, environment=None):
+        if environment is None:
+            environment = {}
+        with self.registry.lock(identifier=worker_id) as session:
+            session.set(WORKER_OBSERVED_MODE, worker_id, mode,
+                        priority=time.time() + lifetime)
+            session.update(WORKER_STATE_ + worker_id, environment,
+                           expire=lifetime)
+
+    def worker_unregister(self, worker_id):
+        with self.registry.lock(
+                identifier=worker_id) as session:
+            session.delete(WORKER_STATE_ + worker_id)
+            session.popmany(WORKER_OBSERVED_MODE, worker_id)

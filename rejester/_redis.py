@@ -53,7 +53,7 @@ class RedisBase(object):
             raise ProgrammerError('app_name must be specified to configure Registry')
 
         self._namespace_str = config['app_name'] + '_' + config['namespace']
-        self.pool = redis.ConnectionPool(host=redis_address, port=redis_port)
+        self.pool = redis.ConnectionPool(host=redis_address, port=redis_port, db=0)
 
     def _ipaddress(self, host, port):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

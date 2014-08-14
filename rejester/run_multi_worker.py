@@ -35,7 +35,6 @@ import daemon
 import dblogger
 import rejester
 from rejester.exceptions import NoSuchWorkSpecError, NoSuchWorkUnitError
-from rejester._task_master import TaskMaster
 from rejester.run import absolute_path
 from rejester.workers import run_worker, MultiWorker, SingleWorker, \
     ForkWorker

@@ -55,12 +55,13 @@ def test_task_master_basic_interface(task_master):
 
 def test_list_work_specs(task_master):
     # Initial state: nothing
-    assert task_master.list_work_specs() == {}
+    assert task_master.list_work_specs() == ([],None)
     
     work_units = dict(foo={ 'length': 3 }, foobar={ 'length': 6 })
     task_master.update_bundle(work_spec, work_units)
 
-    specs = task_master.list_work_specs()
+    specs, next = task_master.list_work_specs()
+    specs = dict(specs)
     assert len(specs) == 1
     assert work_spec['name'] in specs
     assert specs[work_spec['name']]['desc'] == work_spec['desc']

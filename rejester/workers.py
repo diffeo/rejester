@@ -58,7 +58,8 @@ from setproctitle import setproctitle
 
 import dblogger
 import rejester
-from rejester import TaskMaster, Worker
+from rejester._task_master import build_task_master
+from rejester import Worker
 from rejester._task_master import WORKER_OBSERVED_MODE, WORKER_STATE_
 from rejester._registry import nice_identifier
 import yakonfig
@@ -71,7 +72,7 @@ def test_work_program(work_unit):
     ## of using work_unit.registry
     config = work_unit.data['config']
     sleeptime = float(work_unit.data.get('sleep', 9.0))
-    task_master = TaskMaster(config)
+    task_master = build_task_master(config)
     logger.info('executing work_unit %r ... %s', work_unit.key, sleeptime)
     time.sleep(sleeptime)  # pretend to work
     logger.info('finished %r' % work_unit)
@@ -846,17 +847,17 @@ class ForkWorker(Worker):
                                                self.heartbeat_interval)
                 else:
                     mode = self.last_mode
-                if mode != TaskMaster.RUN:
+                if mode != self.task_master.RUN:
                     can_start_more = False
                 interval = self.do_some_work(can_start_more)
                 # Normal shutdown case
                 if len(self.children) == 0:
-                    if mode == TaskMaster.TERMINATE:
-                        self.log(logger.INFO,
+                    if mode == self.task_master.TERMINATE:
+                        self.log(logging.INFO,
                                  'stopping for rejester global shutdown')
                         break
                     if self.shutting_down:
-                        self.log(logger.INFO,
+                        self.log(logging.INFO,
                                  'stopping in response to signal')
                         break
                 time.sleep(interval)
