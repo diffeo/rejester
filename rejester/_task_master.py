@@ -1354,7 +1354,7 @@ class TaskMaster(object):
         with self.registry.lock(identifier=self.worker_id) as session:
             session.update(NICE_LEVELS, dict(work_spec_name=nice))
 
-    def get_work(self, worker_id, available_gb=None, lease_time=300):
+    def get_work(self, worker_id, available_gb=None, lease_time=300, work_spec_names=None):
         '''obtain a WorkUnit instance based on available memory for the
         worker process.  
         
@@ -1363,6 +1363,7 @@ class TaskMaster(object):
         :param available_gb: number of gigabytes of RAM available to
           this worker
         :param lease_time: how many seconds to lease a WorkUnit
+        :param work_spec_names: limit to queue from one work_spec. NOT IMPLEMENTD. this implementation will return work from any work spec.
 
         '''
 

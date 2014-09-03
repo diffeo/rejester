@@ -231,6 +231,6 @@ do this, reach out on streamcorpus@googlegroups.com
 from __future__ import absolute_import
 from rejester.config import config_name, default_config, add_arguments, \
     runtime_keys, discover_config, check_config
-from rejester._task_master import TaskMaster, WorkUnit, Worker
+from rejester._task_master import TaskMaster, WorkUnit, Worker, build_task_master
 from rejester._queue import RejesterQueue
 from rejester._registry import Registry
