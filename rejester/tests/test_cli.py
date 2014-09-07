@@ -652,7 +652,7 @@ def test_run_worker_minimal(manager, tmpdir, global_config):
     assert rc == 0
 
     pid = None
-    for i in xrange(10):
+    for i in xrange(100):
         if os.path.exists(pidfile):
             with open(pidfile, 'r') as f:
                 pid = int(f.read())
@@ -697,7 +697,7 @@ def test_run_worker_sigterm(tmpdir, global_config):
     assert rc == 0
 
     pid = None
-    for i in xrange(10):
+    for i in xrange(100):
         if os.path.exists(pidfile):
             with open(pidfile, 'r') as f:
                 pid = int(f.read())
