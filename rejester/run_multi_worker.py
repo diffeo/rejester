@@ -126,7 +126,7 @@ def fork_worker(gconfig, args):
         pidfile_lock = lockfile.FileLock(args.pidfile)
     else:
         pidfile_lock = None
-    with daemon.DaemonContext(pidfile=pidfile_lock):
+    with daemon.DaemonContext(pidfile=pidfile_lock, detach_process=True):
         try:
             if args.pidfile:
                 with open(args.pidfile, 'w') as f:
