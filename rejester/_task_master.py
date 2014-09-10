@@ -35,6 +35,27 @@ WORKER_STATE_ = 'WORKER_STATE_'
 WORKER_OBSERVED_MODE = 'WORKER_OBSERVED_MODE'
 ACTIVE_LEASES = 'ACTIVE_LEASES'
 
+
+## work unit states
+AVAILABLE = 1
+BLOCKED = 2
+PENDING = 3
+FINISHED = 4
+FAILED = 5
+
+WORK_UNIT_STATUS_BY_NAME = {
+    'AVAILABLE': AVAILABLE,
+    'BLOCKED': BLOCKED,
+    'PENDING': PENDING,
+    'FINISHED': FINISHED,
+    'FAILED': FAILED,
+}
+
+WORK_UNIT_STATUS_NAMES_BY_NUMBER = {
+    v:k for k,v in WORK_UNIT_STATUS_BY_NAME.iteritems()
+}
+
+
 def build_task_master(config):
     tm_factory_module_name = config.get('task_master_module')
     if tm_factory_module_name is not None:
@@ -101,7 +122,7 @@ class Worker(object):
             working_set = [(dist.key, dist.version) for dist in pkg_resources.WorkingSet()], # pylint: disable=E1103
             #config_hash = self.config['config_hash'],
             #config_json = self.config['config_json'],
-            memory = psutil.phymem_usage(),
+            memory = psutil.virtual_memory(),
         )
         return env
 
@@ -564,6 +585,13 @@ class TaskMaster(object):
     #: Mode constant instructing workers to shut down
     TERMINATE = 'TERMINATE'
 
+    # states for a work unit
+    AVAILABLE = AVAILABLE
+    BLOCKED = BLOCKED
+    PENDING = PENDING
+    FINISHED = FINISHED
+    FAILED = FAILED
+
     def set_mode(self, mode):
         '''Set the global mode of the rejester system.
 
@@ -810,6 +838,31 @@ class TaskMaster(object):
         '''Get the dictionary defining some work spec.'''
         with self.registry.lock(identifier=self.worker_id) as session:
             return session.get(WORK_SPECS, work_spec_name)
+
+    def get_work_units(self, work_spec_name, work_unit_keys=None, state=None, limit=None, start=None):
+        '''
+        options={work_unit_keys=None, state=None, limit=None, start=None}
+        options['state'] accepts either a single state or a list/tuple of states
+
+        returns [(wu key, wu data), ...]
+        '''
+        if work_unit_keys is not None:
+            raise NotImplementedError("get_work_units(by work_unit_keys)")
+        if start is None:
+            start = 0
+        if state is not None:
+            if state == AVAILABLE:
+                return self.list_available_work_units(work_spec_name, start=start, limit=limit).items()
+            if state == PENDING:
+                return self.list_pending_work_units(work_spec_name, start=start, limit=limit).items()
+            if state == BLOCKED:
+                return self.list_blocked_work_units(work_spec_name, start=start, limit=limit).items()
+            if state == FINISHED:
+                return self.list_finished_work_units(work_spec_name, start=start, limit=limit).items()
+            if state == FAILED:
+                return self.list_failed_work_units(work_spec_name, start=start, limit=limit).items()
+            raise ProgrammerError("unknown state {!r}".format(state))
+        return self.list_work_units(work_spec_name, start=start, limit=limit)
 
     def list_work_units(self, work_spec_name, start=0, limit=None):
         """Get a dictionary of work units for some work spec.
@@ -1400,6 +1453,7 @@ class TaskMaster(object):
                     ## verify sufficient memory
                     work_spec = session.get(WORK_SPECS, work_spec_name)
                     if available_gb < work_spec['min_gb']:
+                        logger.debug('not enough ram for %r, need %s have %s', work_spec_name, work_spec['min_gb'], available_gb)
                         continue
 
                     ## try to get a task

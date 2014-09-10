@@ -382,13 +382,15 @@ class Manager(ArgParseCmd):
     def do_work_units(self, args):
         '''list work units that have not yet completed'''
         work_spec_name = self._get_work_spec_name(args)
-        fns = { 'available': self.task_master.list_available_work_units,
-                'pending': self.task_master.list_pending_work_units,
-                'blocked': self.task_master.list_blocked_work_units,
-                'finished': self.task_master.list_finished_work_units,
-                'failed': self.task_master.list_failed_work_units }
-        fn = fns.get(args.status, self.task_master.list_work_units)
-        work_units = fn(work_spec_name, limit=args.limit)
+        if args.status:
+            status = args.status.upper()
+            statusi = getattr(self.task_master, status, None)
+            if statusi is None:
+                self.stdout.write('unknown status {!r}\n'.format(args.status))
+                return
+        else:
+            statusi = None
+        work_units = dict(self.task_master.get_work_units(work_spec_name, state=statusi, limit=args.limit))
         work_unit_names = sorted(work_units.keys())
         if args.limit: work_unit_names = work_unit_names[:args.limit]
         for k in work_unit_names:

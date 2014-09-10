@@ -66,7 +66,7 @@ def work_spec():
     return dict(
         name = 'tbundle',
         desc = 'a test work bundle',
-        min_gb = 8,
+        min_gb = 0.01,
         config = dict(many=' ', params=''),
         module = 'rejester.tests.test_cli',
         run_function = 'rejester_cb',
@@ -601,14 +601,17 @@ def test_run_one_none(manager):
     assert manager.exitcode == 2
 
 def test_run_one_one(manager, work_spec, task_master, loaded):
-    available = task_master.num_available(work_spec['name'])
+    work_spec_name = work_spec['name']
+    logger.info('work_spec name %r', work_spec_name)
+    available = task_master.num_available(work_spec_name)
+    logger.info('%s available: %s', work_spec_name, available)
     manager.runcmd('run_one', [])
     assert manager.stdout.getvalue() == ''
     assert manager.exitcode == 0
-    assert task_master.num_available(work_spec['name']) == available - 1
-    assert task_master.num_pending(work_spec['name']) == 0
-    assert task_master.num_failed(work_spec['name']) == 0
-    assert task_master.num_finished(work_spec['name']) == 1
+    assert task_master.num_available(work_spec_name) == available - 1
+    assert task_master.num_pending(work_spec_name) == 0
+    assert task_master.num_failed(work_spec_name) == 0
+    assert task_master.num_finished(work_spec_name) == 1
 
 def test_run_worker_args(manager, tmpdir, global_config):
     cfgfile = str(tmpdir.join('config.yaml'))

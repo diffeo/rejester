@@ -51,7 +51,7 @@ def work_program_broken(work_unit):
 work_spec = dict(
     name = 'tbundle',
     desc = 'a test work bundle',
-    min_gb = 8,
+    min_gb = 0.01,
     config = dict(many=' ' * 2**10, params=''),
     module = 'rejester.tests.test_workers',
     run_function = 'work_program',
