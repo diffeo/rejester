@@ -326,9 +326,13 @@ def test_fork_worker_expiry(task_master, tmpdir, in_tmpdir):
         subprocess.check_call([sys.executable,
                                '-m', 'rejester.run_multi_worker',
                                '-c', str(fn1), '--pidfile', str(pidfn1)])
-        # If this bombs out, the worker didn't actually start up
-        time.sleep(0.1)
-        pid1 = int(pidfn1.read())
+        # Wait for the worker to start up (up to 5s)
+        for i in xrange(50):
+            if pidfn1.exists():
+                pid1 = int(pidfn1.read())
+                break
+            time.sleep(0.1)
+        assert pid1 is not None, "worker didn't start up"
 
         time.sleep(0.1)
 
@@ -360,9 +364,12 @@ def test_fork_worker_expiry(task_master, tmpdir, in_tmpdir):
         subprocess.check_call([sys.executable,
                                '-m', 'rejester.run_multi_worker',
                                '-c', str(fn2), '--pidfile', str(pidfn2)])
-        # If this bombs out, the worker didn't actually start up
-        time.sleep(0.1)
-        pid2 = int(pidfn2.read())
+        for i in xrange(50):
+            if pidfn2.exists():
+                pid2 = int(pidfn2.read())
+                break
+            time.sleep(0.1)
+        assert pid2 is not None, "worker didn't start up"
 
         time.sleep(0.1)
 
