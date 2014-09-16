@@ -9,15 +9,27 @@ import copy
 import time
 import logging
 import multiprocessing
+import signal
+import subprocess
 import sys
 
 import pytest
+import yaml
 
 import rejester
 from rejester.workers import run_worker, MultiWorker, SingleWorker
 
 logger = logging.getLogger(__name__)
 pytest_plugins = 'rejester.tests.fixtures'
+
+@pytest.yield_fixture
+def in_tmpdir(tmpdir):
+    oldpwd = os.getcwd()
+    try:
+        os.chdir(str(tmpdir))
+        yield
+    finally:
+        os.chdir(oldpwd)
 
 def test_task_register(task_master):
     worker = MultiWorker(task_master.registry.config)
@@ -277,3 +289,104 @@ def test_task_master_multi_worker_multi_update_miniwait(task_master):
     num_workers = multiprocessing.cpu_count()
     assert task_master.num_failed(work_spec['name']) == 0
     assert task_master.num_finished(work_spec['name']) >= num_workers
+
+@pytest.mark.slow
+def test_fork_worker_expiry(task_master, tmpdir, in_tmpdir):
+    '''Test that job expiration and default_lifetime work as expected.'''
+    # If this accidentally runs in the top-level rejester directory,
+    # WorkUnit.module's __import__ call doesn't find it...strange.
+    # The in_tmpdir fixture runs this test with the current working
+    # directory set to tmpdir to avoid this.
+
+    # Create a job that sleeps for 10 seconds
+    work_units = {'key0': {'config': task_master.registry.config,
+                           'sleep': 10.0}}
+    task_master.update_bundle(work_spec, work_units)
+    task_master.set_mode(task_master.RUN)
+
+    assert task_master.status(work_spec['name']) == {
+        'num_available': 1, 'num_pending': 0,
+        'num_finished': 0, 'num_failed': 0,
+        'num_blocked': 0, 'num_tasks': 1,
+    }
+
+    pid1 = None
+    pid2 = None
+
+    try:
+        # Start a ForkWorker, but with a 1-second job expiration
+        c1 = {'rejester': dict(task_master.registry.config)}
+        c1['rejester']['default_lifetime'] = 1
+        c1['rejester']['worker'] = 'fork_worker'
+        c1['rejester'].setdefault('fork_worker', {})
+        c1['rejester']['fork_worker']['num_workers'] = 1
+        fn1 = tmpdir.join('c1.yaml')
+        fn1.write(yaml.dump(c1))
+        pidfn1 = tmpdir.join('c1.pid')
+        subprocess.check_call([sys.executable,
+                               '-m', 'rejester.run_multi_worker',
+                               '-c', str(fn1), '--pidfile', str(pidfn1)])
+        # If this bombs out, the worker didn't actually start up
+        time.sleep(0.1)
+        pid1 = int(pidfn1.read())
+
+        time.sleep(0.1)
+
+        # Now the job should be going
+        assert task_master.status(work_spec['name']) == {
+            'num_available': 0, 'num_pending': 1,
+            'num_finished': 0, 'num_failed': 0,
+            'num_blocked': 0, 'num_tasks': 1,
+        }
+
+        time.sleep(2.0)
+
+        # Now the worker is still doing the job, but it's also in the
+        # available queue again
+        assert task_master.status(work_spec['name']) == {
+            'num_available': 1, 'num_pending': 0,
+            'num_finished': 0, 'num_failed': 0,
+            'num_blocked': 0, 'num_tasks': 1,
+        }
+
+        # So start a second worker, with the default timeout
+        c2 = {'rejester': dict(task_master.registry.config)}
+        c2['rejester']['worker'] = 'fork_worker'
+        c2['rejester'].setdefault('fork_worker', {})
+        c2['rejester']['fork_worker']['num_workers'] = 1
+        fn2 = tmpdir.join('c2.yaml')
+        fn2.write(yaml.dump(c2))
+        pidfn2 = tmpdir.join('c2.pid')
+        subprocess.check_call([sys.executable,
+                               '-m', 'rejester.run_multi_worker',
+                               '-c', str(fn2), '--pidfile', str(pidfn2)])
+        # If this bombs out, the worker didn't actually start up
+        time.sleep(0.1)
+        pid2 = int(pidfn2.read())
+
+        time.sleep(0.1)
+
+        # Now the second worker should have picked up the job
+        assert task_master.status(work_spec['name']) == {
+            'num_available': 0, 'num_pending': 1,
+            'num_finished': 0, 'num_failed': 0,
+            'num_blocked': 0, 'num_tasks': 1,
+        }
+
+        # Wait for it to finish
+        time.sleep(10.0)
+
+        # Now: both workers should have finished the job; the first
+        # worker catches LostLease and reports nothing; the second
+        # worker reports successful completion
+        assert task_master.status(work_spec['name']) == {
+            'num_available': 0, 'num_pending': 0,
+            'num_finished': 1, 'num_failed': 0,
+            'num_blocked': 0, 'num_tasks': 1,
+        }
+
+    finally:
+        if pid1 is not None:
+            os.kill(pid1, signal.SIGTERM)
+        if pid2 is not None:
+            os.kill(pid2, signal.SIGTERM)

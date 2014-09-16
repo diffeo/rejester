@@ -1,7 +1,7 @@
 '''External API for rejester task system.
 
 .. This software is released under an MIT/X11 open source license.
-   Copyright 2012-2013 Diffeo, Inc.
+   Copyright 2012-2014 Diffeo, Inc.
 
 '''
 from __future__ import absolute_import
@@ -204,7 +204,7 @@ class WorkUnit(object):
 
     '''
     def __init__(self, registry, work_spec_name, key, data, worker_id=None,
-                 expires=None):
+                 expires=None, default_lifetime=900):
         '''Create a new work unit runtime data.
 
         In most cases application code will not need to call this directly,
@@ -217,6 +217,7 @@ class WorkUnit(object):
         :param dict data: Data provided for the work unit
         :param str worker_id: Worker doing this work unit
         :param int expires: Latest time this work unit can still be running
+        :param int default_lifetime: Time :meth:`update` adds by default
 
         '''
         if not worker_id:
@@ -237,6 +238,8 @@ class WorkUnit(object):
         self.failed = False
         #: Time (as :func:`time.time`) when this work unit must finish
         self.expires = expires
+        #: Time :meth:`update` adds by default
+        self.default_lifetime = default_lifetime
         self._spec_cache = None  # storage for lazy getter property
         self._module_cache = None  # storage for lazy getter property
 
@@ -289,13 +292,16 @@ class WorkUnit(object):
         function with :const:`self` as its only parameter.
 
         '''
-        run_function = getattr(self.module, self.spec['run_function'])
-        logger.info('running work unit {}'.format(self.key))
         try:
+            logger.info('running work unit {}'.format(self.key))
+            run_function = getattr(self.module, self.spec['run_function'])
             ret_val = run_function(self)
             self.update()
             logger.info('completed work unit {}'.format(self.key))
             return ret_val
+        except LostLease, exc:
+            logger.warning('work unit {} timed out'.format(self.key))
+            raise
         except Exception, exc:
             logger.error('work unit {} failed'.format(self.key),
                          exc_info=True)
@@ -328,7 +334,7 @@ class WorkUnit(object):
         self.update(lease_time=-10)
         return ret_val
 
-    def update(self, lease_time=300):
+    def update(self, lease_time=None):
         '''Refresh this task's expiration time.
 
         This tries to set the task's expiration time to the current
@@ -345,6 +351,8 @@ class WorkUnit(object):
             raise ProgrammerError('cannot .update() after .finish()')
         if self.failed:
             raise ProgrammerError('cannot .update() after .fail()')
+        if lease_time is None:
+            lease_time = self.default_lifetime
         with self.registry.lock(identifier=self.worker_id) as session:
             if self.finished:
                 logger.debug('WorkUnit(%r) became finished while waiting for lock to update', self.key)
@@ -577,6 +585,8 @@ class TaskMaster(object):
         self.registry = Registry(config)
         #: Worker ID, if this is tied to a worker
         self.worker_id = None
+        #: Amount of time workers get between :meth:`WorkUnit.update` calls
+        self.default_lifetime = config.get('default_lifetime', 900)
 
     #: Mode constant instructing workers to do work
     RUN = 'RUN'
@@ -1407,7 +1417,7 @@ class TaskMaster(object):
         with self.registry.lock(identifier=self.worker_id) as session:
             session.update(NICE_LEVELS, dict(work_spec_name=nice))
 
-    def get_work(self, worker_id, available_gb=None, lease_time=300, work_spec_names=None):
+    def get_work(self, worker_id, available_gb=None, lease_time=None, work_spec_names=None):
         '''obtain a WorkUnit instance based on available memory for the
         worker process.  
         
@@ -1423,6 +1433,8 @@ class TaskMaster(object):
         if not isinstance(available_gb, (int, float)):
             raise ProgrammerError('must specify available_gb')
 
+        if lease_time is None:
+            lease_time = self.default_lifetime
         work_unit = None
 
         try: 
@@ -1472,6 +1484,7 @@ class TaskMaster(object):
                             _work_unit[0], _work_unit[1],
                             worker_id=worker_id,
                             expires=wu_expires,
+                            default_lifetime=self.default_lifetime,
                         )
                         break
 
@@ -1504,7 +1517,8 @@ class TaskMaster(object):
             return WorkUnit(
                 self.registry, work_spec_name,
                 work_unit_key, work_unit_data,
-                worker_id=worker_id,                            
+                worker_id=worker_id,
+                default_lifetime=self.default_lifetime,
             )
 
     def worker_register(self, worker_id, mode=None, lifetime=6000, environment=None):

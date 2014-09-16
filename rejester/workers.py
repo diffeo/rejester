@@ -60,6 +60,7 @@ import dblogger
 import rejester
 from rejester._task_master import build_task_master
 from rejester import Worker
+from rejester.exceptions import LostLease
 from rejester._task_master import WORKER_OBSERVED_MODE, WORKER_STATE_
 from rejester._registry import nice_identifier
 import yakonfig
@@ -365,6 +366,9 @@ class SingleWorker(Worker):
                              .format(unit.work_spec_name, unit.key))
             unit.run()
             unit.finish()
+        except LostLease, e:
+            # We don't own the unit any more so don't try to report on it
+            pass
         except Exception, e:
             unit.fail(e)
         return True

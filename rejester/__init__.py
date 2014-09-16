@@ -12,13 +12,82 @@ programs without using the dedicated worker process.  For specialized
 applications there is also a globally atomic string-based priority
 queue.
 
+To use a rejester-based application:
+
+1. Create a YAML configuration file as described below.
+
+2. Run ``rejester mode run`` once on any system to enable rejester.
+
+3. Run :command:`rejester_worker` on some number of systems with
+   identical copies of the configuration file.  These may be anywhere,
+   but must be able to reach the `Redis`_ server.  Each will start as
+   many workers as the system has CPU cores.
+
+4. Run some tool that generates rejester work units.  For instance,
+   the :command:`streamcorpus_directory` tool included in
+   `streamcorpus-pipeline`_ generates work units to process text
+   files.
+
+5. Run ``rejester summary`` and other sub-commands of the
+   :command:`rejester` tool to get information about the job's progress.
+
+6. Run ``rejester mode terminate`` to instruct all of the workers to
+   shut down.
+
 .. _Redis: http://redis.io/
+.. _streamcorpus-pipeline: https://github.com/trec-kba/streamcorpus-pipeline
 
 :command:`rejester` tool
 ========================
 
 .. automodule:: rejester.run
+
+:command:`rejester_worker` tool
+===============================
+
+.. automodule:: rejester.run_multi_worker
+
 .. currentmodule:: rejester
+
+Configuration
+=============
+
+Rejester uses :mod:`yakonfig` for its configuration.  The relevant
+section of the configuration file looks like:
+
+.. code-block:: yaml
+
+    rejester:
+      # These two options are required
+      registry_addresses: [ "redis.example.com:6379" ]
+      namespace: rejester
+
+      # The following are optional, defaults shown
+      app_name: rejester
+      default_lifetime: 900
+      worker: fork_worker
+
+`registry_addresses` indicates the location of the `Redis`_ server.
+While this is a list, only the first value is used.  Also note that
+YAML syntax requires quoting the ``host:port`` string, lest it be
+interpreted as a dictionary.
+
+`app_name` and `namespace` identify the specific application in use.
+Multiple applications can share the same `Redis`_ server so long as
+they have distinct namespace strings.  `app_name` is currently fixed
+at ``rejester`` and setting a different value has no effect.
+
+`default_lifetime` indicates how long a job is allowed to run before
+it must call :meth:`rejester._task_master.WorkUnit.update`.  If a
+job runs beyond this timeout it will return from the "pending" list to
+the "available" list, and another worker may start working on it.
+
+`worker` specifies the worker implementation to use in
+:command:`rejester_worker`.  Valid options are ``fork_worker`` or
+``multi_worker``.  ``fork_worker`` has additional configuration
+options; see :class:`~rejester.workers.ForkWorker` for details.
+``multi_worker`` is less stable and never allows jobs to time out, but
+will start a set of jobs more quickly.
 
 Task system
 ===========
