@@ -65,6 +65,7 @@ section of the configuration file looks like:
       # The following are optional, defaults shown
       app_name: rejester
       default_lifetime: 900
+      enough_memory: false
       worker: fork_worker
 
 `registry_addresses` indicates the location of the `Redis`_ server.
@@ -81,6 +82,10 @@ at ``rejester`` and setting a different value has no effect.
 it must call :meth:`rejester._task_master.WorkUnit.update`.  If a
 job runs beyond this timeout it will return from the "pending" list to
 the "available" list, and another worker may start working on it.
+
+When a worker requests a job, if the system does not have enough memory
+to satisfy a given work spec's ``min_gb`` request, that work spec is
+skipped.  Setting `enough_memory` to true overrides this check.
 
 `worker` specifies the worker implementation to use in
 :command:`rejester_worker`.  Valid options are ``fork_worker`` or

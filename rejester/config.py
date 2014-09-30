@@ -12,6 +12,7 @@ config_name = 'rejester'
 default_config = {
     'app_name': 'rejester',
     'worker': 'fork_worker',
+    'enough_memory': False,
     'default_lifetime': 1500,
 }
 

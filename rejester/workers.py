@@ -208,7 +208,7 @@ class MultiWorker(Worker):
     def available_gb(cls):
         if cls._available_gb is None:
             mem = psutil.virtual_memory()
-            cls._available_gb = float(mem.free) / (multiprocessing.cpu_count() * 2**30)
+            cls._available_gb = float(mem.available) / (multiprocessing.cpu_count() * 2**30)
         return cls._available_gb
 
     def _finish_callback(self, *args):
@@ -358,7 +358,7 @@ class SingleWorker(Worker):
         available_gb = MultiWorker.available_gb()
         unit = self.task_master.get_work(self.worker_id, available_gb)
         if unit is None:
-            logger.info('SingleWorker get_work None. Done.')
+            logger.info('No work to do; stopping.')
             return False
         try:
             if set_title:

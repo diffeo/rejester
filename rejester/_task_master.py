@@ -587,6 +587,8 @@ class TaskMaster(object):
         self.worker_id = None
         #: Amount of time workers get between :meth:`WorkUnit.update` calls
         self.default_lifetime = config.get('default_lifetime', 900)
+        #: Override available-memory checks
+        self.enough_memory = config.get('enough_memory', False)
 
     #: Mode constant instructing workers to do work
     RUN = 'RUN'
@@ -1465,8 +1467,21 @@ class TaskMaster(object):
                     ## verify sufficient memory
                     work_spec = session.get(WORK_SPECS, work_spec_name)
                     if available_gb < work_spec['min_gb']:
-                        logger.debug('not enough ram for %r, need %s have %s', work_spec_name, work_spec['min_gb'], available_gb)
-                        continue
+                        if self.enough_memory:
+                            logger.info('Not enough memory to run work '
+                                        'spec %s (need %.1f GiB, have '
+                                        '%.1f GiB) but running anyways',
+                                        work_spec_name,
+                                        work_spec['min_gb'],
+                                        available_gb)
+                        else:
+                            logger.info('Not enough memory to run work '
+                                        'spec %s (need %.1f GiB, have '
+                                        '%.1f GiB)',
+                                        work_spec_name,
+                                        work_spec['min_gb'],
+                                        available_gb)
+                            continue
 
                     ## try to get a task
                     wu_expires = time.time() + lease_time
