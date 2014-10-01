@@ -280,17 +280,22 @@ class Manager(ArgParseCmd):
         parser.add_argument('-n', '--nice', default=0, type=int, 
                             help='specify a nice level for these jobs')
         parser.add_argument('-u', '--work-units', metavar='FILE',
-                            dest='work_units_path', required=True,
+                            dest='work_units_path',
                             type=existing_path_or_minus,
                             help='path to file with one JSON record per line')
+        parser.add_argument('--no-work', default=False, action='store_true',
+                            help='set no work units, just the work spec')
     def do_load(self, args):
         '''loads work_units into a namespace for a given work_spec'''
         work_spec = self._get_work_spec(args)
-        if args.work_units_path == '-':
+        if args.no_work:
+            work_units_fh = []  # it just has to be an iterable with no lines
+        elif args.work_units_path == '-':
             work_units_fh = sys.stdin
         elif args.work_units_path.endswith('.gz'):
             work_units_fh = gzip.open(args.work_units_path)
         else:
+            assert args.work_units_path, 'need -u/--work-units or --no-work'
             work_units_fh = open(args.work_units_path)
         self.stdout.write('loading work units from {!r}\n'
                           .format(work_units_fh))
@@ -307,9 +312,12 @@ class Manager(ArgParseCmd):
         self.stdout.write('pushing work units\n')
         work_spec['nice'] = args.nice
         self.task_master.set_work_spec(work_spec)
-        self.task_master.add_work_units(work_spec['name'], work_units.items())
-        self.stdout.write('finished writing {} work units to work_spec={!r}\n'
-                          .format(len(work_units), work_spec['name']))
+        if work_units:
+            self.task_master.add_work_units(work_spec['name'], work_units.items())
+            self.stdout.write('finished writing {} work units to work_spec={!r}\n'
+                              .format(len(work_units), work_spec['name']))
+        else:
+            self.stdout.write('no work units. done.\n')
 
     def args_delete(self, parser):
         parser.add_argument('-y', '--yes', default=False, action='store_true',
