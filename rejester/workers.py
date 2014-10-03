@@ -333,6 +333,7 @@ class MultiWorker(Worker):
 
         logger.info('MultiWorker exiting')
 
+
 class SingleWorker(Worker):
     '''Worker that runs exactly one job when called.
 
@@ -343,6 +344,18 @@ class SingleWorker(Worker):
 
     '''
     def run(self, set_title=False):
+        '''Do some work.
+
+        The standard implementation here calls :meth:`run_one`.
+
+        :param set_title: if true, set the process's title with the
+          work unit name
+        :return: :const:`True` if there was a job (even if it failed)
+
+        '''
+        return self.run_one(set_title)
+
+    def run_one(self, set_title=False):
         '''Get exactly one job, run it, and return.
 
         Does nothing (but returns :const:`False`) if there is no work
@@ -412,6 +425,50 @@ class SingleWorker(Worker):
                 logger.critical('failed to do any work', exc_info=e)
             sys.exit(cls.EXIT_EXCEPTION)
 
+
+class LoopWorker(SingleWorker):
+    '''Worker that runs jobs for a fixed length of time.
+
+    This does jobs as :meth:`SingleWorker.run_one`.  However,
+    the worker itself is configured with a maximum lifetime, and
+    if a job finishes before the lifetime has passed, this worker
+    will try to do another job.
+
+    '''
+    def run(self, set_title=False):
+        '''Do some work.
+
+        The standard implementation here calls :meth:`run_loop`.
+
+        :param set_title: if true, set the process's title with the
+          work unit name
+        :return: :const:`True` if there was a job (even if it failed)
+
+        '''
+        return self.run_one(set_title)
+
+    def run_loop(self, set_title=False):
+        # Find our deadline from the global configuration.
+        # We don't really love this, but it's data we're already
+        # passing across process boundaries.
+        now = time.time()
+        try:
+            duration = yakonfig.get_global_config('rejester', 'fork_worker',
+                                                  'child_lifetime')
+        except KeyError:
+            duration = 10
+        deadline = now + duration
+
+        while True:
+            ret = self.run_one(set_title)
+            if not ret:
+                break
+            if time.time() >= deadline:
+                break
+
+        return ret
+
+
 class ForkWorker(Worker):
     '''Parent worker that runs multiple jobs concurrently.
 
@@ -441,6 +498,8 @@ class ForkWorker(Worker):
             spawn_interval: 0.01
             # how often to record our existence
             heartbeat_interval: 15
+            # minimum time a working worker will live
+            child_lifetime: 10
 
     This spawns child processes to do work.  Each child process does at
     most one work unit.  If `num_workers` is set, at most this many
@@ -471,9 +530,6 @@ class ForkWorker(Worker):
     recording its state and retrieving the global mode, every
     `heartbeat_interval`.
 
-    .. todo:: This should become the default process-level worker,
-              replacing :class:`MultiWorker`.
-
     '''
     
     '''Several implementation notes:
@@ -502,8 +558,10 @@ class ForkWorker(Worker):
         'poll_interval': 1,
         'spawn_interval': 0.01,
         'heartbeat_interval': 15,
+        'child_lifetime': 10,
         'debug_worker': None,
     }
+
     @classmethod
     def config_get(cls, config, key):
         return config.get(key, cls.default_config[key])
@@ -533,7 +591,8 @@ class ForkWorker(Worker):
         self.poll_interval = self.config_get(c, 'poll_interval')
         self.spawn_interval = self.config_get(c, 'spawn_interval')
         self.heartbeat_interval = self.config_get(c, 'heartbeat_interval')
-        self.heartbeat_deadline = time.time() - 1 # due now
+        self.heartbeat_deadline = time.time() - 1  # due now
+        self.child_lifetime = self.config_get(c, 'child_lifetime')
         self.debug_worker = c.get('debug_worker', [])
         self.children = set()
         self.log_child = None
@@ -635,7 +694,7 @@ class ForkWorker(Worker):
         except Exception, e:
             logger.critical('log writer failed', exc_info=e)
             raise
-        
+
     def start_log_child(self):
         '''Start the logging child process.'''
         self.stop_log_child()
@@ -748,7 +807,7 @@ class ForkWorker(Worker):
                 self.log(logging.WARNING,
                          'child {} exited, but we don\'t recognize it'
                          .format(pid))
-        
+
         # ...what next?
         # (Don't log anything here; either we logged a WARNING message
         # above when things went badly, or we're in a very normal flow
@@ -769,7 +828,7 @@ class ForkWorker(Worker):
                 self.clear_signal_handlers()
                 if self.log_fd:
                     os.close(self.log_fd)
-                SingleWorker.as_child(yakonfig.get_global_config())
+                LoopWorker.as_child(yakonfig.get_global_config())
                 # This should never return, but just in case
                 sys.exit(SingleWorker.EXIT_EXCEPTION)
             else:
