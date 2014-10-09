@@ -175,14 +175,13 @@ given on the command line.  The tool provides the following commands:
 '''
 from __future__ import absolute_import
 import argparse
+import gzip
 import json
 import logging
 import os
 import sys
 import time
-import traceback
 
-import daemon
 import yaml
 
 import dblogger
@@ -277,14 +276,16 @@ class Manager(ArgParseCmd):
 
     def args_load(self, parser):
         self._add_work_spec_args(parser)
-        parser.add_argument('-n', '--nice', default=0, type=int, 
+        parser.add_argument('-n', '--nice', default=0, type=int,
                             help='specify a nice level for these jobs')
-        parser.add_argument('-u', '--work-units', metavar='FILE',
-                            dest='work_units_path',
-                            type=existing_path_or_minus,
-                            help='path to file with one JSON record per line')
-        parser.add_argument('--no-work', default=False, action='store_true',
-                            help='set no work units, just the work spec')
+        group = parser.add_mutually_exclusive_group(required=True)
+        group.add_argument('-u', '--work-units', metavar='FILE',
+                           dest='work_units_path',
+                           type=existing_path_or_minus,
+                           help='path to file with one JSON record per line')
+        group.add_argument('--no-work', default=False, action='store_true',
+                           help='set no work units, just the work spec')
+
     def do_load(self, args):
         '''loads work_units into a namespace for a given work_spec'''
         work_spec = self._get_work_spec(args)
@@ -292,11 +293,13 @@ class Manager(ArgParseCmd):
             work_units_fh = []  # it just has to be an iterable with no lines
         elif args.work_units_path == '-':
             work_units_fh = sys.stdin
-        elif args.work_units_path.endswith('.gz'):
-            work_units_fh = gzip.open(args.work_units_path)
+        elif args.work_units_path is not None:
+            if args.work_units_path.endswith('.gz'):
+                work_units_fh = gzip.open(args.work_units_path)
+            else:
+                work_units_fh = open(args.work_units_path)
         else:
-            assert args.work_units_path, 'need -u/--work-units or --no-work'
-            work_units_fh = open(args.work_units_path)
+            raise RuntimeError('need -u/--work-units or --no-work')
         self.stdout.write('loading work units from {!r}\n'
                           .format(work_units_fh))
         work_units = dict()
