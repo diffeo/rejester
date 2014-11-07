@@ -274,6 +274,39 @@ class Manager(ArgParseCmd):
             return args.work_spec_name
         return self._get_work_spec(args)['name']
 
+    def _read_work_units_file(self, work_units_fh):
+        '''work_units_fh is iterable on lines (could actually be ['{}',...])
+        '''
+        count = 0
+        for line in work_units_fh:
+            if not line:
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            if line[0] == '#':
+                continue
+            try:
+                count += 1
+                work_unit = json.loads(line)
+                #work_units.update(work_unit)
+                for k,v in work_unit.iteritems():
+                    yield k,v
+            except:
+                logger.error('failed handling work_unit on line %s: %r', count, line, exc_info=True)
+                raise
+
+    def _work_units_fh_from_path(self, work_units_path):
+        work_units_fh = None
+        if work_units_path == '-':
+            work_units_fh = sys.stdin
+        elif work_units_path is not None:
+            if work_units_path.endswith('.gz'):
+                work_units_fh = gzip.open(work_units_path)
+            else:
+                work_units_fh = open(work_units_path)
+        return work_units_fh
+
     def args_load(self, parser):
         self._add_work_spec_args(parser)
         parser.add_argument('-n', '--nice', default=0, type=int,
@@ -287,40 +320,50 @@ class Manager(ArgParseCmd):
                            help='set no work units, just the work spec')
 
     def do_load(self, args):
-        '''loads work_units into a namespace for a given work_spec'''
+        '''loads work_units into a namespace for a given work_spec
+
+        --work-units file is JSON, one work unit per line, each line a
+        JSON dict with the one key being the work unit key and the
+        value being a data dict for the work unit.
+
+        '''
         work_spec = self._get_work_spec(args)
-        if args.no_work:
-            work_units_fh = []  # it just has to be an iterable with no lines
-        elif args.work_units_path == '-':
-            work_units_fh = sys.stdin
-        elif args.work_units_path is not None:
-            if args.work_units_path.endswith('.gz'):
-                work_units_fh = gzip.open(args.work_units_path)
-            else:
-                work_units_fh = open(args.work_units_path)
-        else:
-            raise RuntimeError('need -u/--work-units or --no-work')
-        self.stdout.write('loading work units from {!r}\n'
-                          .format(work_units_fh))
-        work_units = dict()
-        count = 0
-        for line in work_units_fh:
-            try:
-                count += 1
-                work_unit = json.loads(line)
-                work_units.update(work_unit)
-            except:
-                logger.error('failed handling work_unit on line %s: %r', count, line, exc_info=True)
-                raise
-        self.stdout.write('pushing work units\n')
         work_spec['nice'] = args.nice
         self.task_master.set_work_spec(work_spec)
+
+        if args.no_work:
+            work_units_fh = []  # it just has to be an iterable with no lines
+        else:
+            work_units_fh = self._work_units_fh_from_path(args.work_units_path)
+            if work_units_fh is None:
+                raise RuntimeError('need -u/--work-units or --no-work')
+        self.stdout.write('loading work units from {!r}\n'
+                          .format(work_units_fh))
+        work_units = {k:v for k,v in self._read_work_units_file(work_units_fh)}
+
         if work_units:
+            self.stdout.write('pushing work units\n')
             self.task_master.add_work_units(work_spec['name'], work_units.items())
             self.stdout.write('finished writing {} work units to work_spec={!r}\n'
                               .format(len(work_units), work_spec['name']))
         else:
             self.stdout.write('no work units. done.\n')
+
+    def args_addwork(self, parser):
+        self._add_work_spec_name_args(parser)
+        parser.add_argument('-u', '--work-units', metavar='FILE',
+                            dest='work_units_path',
+                            type=existing_path_or_minus,
+                            help='path to file with one JSON record per line')
+
+    def do_addwork(self, args):
+        work_spec_name = self._get_work_spec_name(args)
+        work_units_fh = self._work_units_fh_from_path(args.work_units_path)
+        work_units = [kv for kv in self._read_work_units_file(work_units_fh)]
+        if work_units_fh is None:
+            raise RuntimeError('need -u/--work-units')
+
+        self.task_master.add_work_units(work_spec_name, work_units)
 
     def args_delete(self, parser):
         parser.add_argument('-y', '--yes', default=False, action='store_true',
@@ -350,11 +393,18 @@ class Manager(ArgParseCmd):
 
     def args_work_spec(self, parser):
         self._add_work_spec_name_args(parser)
+        parser.add_argument('--json', default=False, action='store_true',
+                            help='write output in json')
+        parser.add_argument('--yaml', default=False, action='store_true',
+                            help='write output in yaml (default)')
     def do_work_spec(self, args):
         '''dump the contents of an existing work spec'''
         work_spec_name = self._get_work_spec_name(args)
         spec = self.task_master.get_work_spec(work_spec_name)
-        self.stdout.write(json.dumps(spec, indent=4, sort_keys=True) + '\n')
+        if args.json:
+            self.stdout.write(json.dumps(spec, indent=4, sort_keys=True) + '\n')
+        else:
+            yaml.safe_dump(spec, self.stdout)
 
     def args_status(self, parser):
         self._add_work_spec_name_args(parser)
@@ -437,7 +487,7 @@ class Manager(ArgParseCmd):
         for work_unit_name in args.unit:
             status = self.task_master.get_work_unit_status(work_spec_name,
                                                            work_unit_name)
-            self.stdout.write('{} ({})\n'
+            self.stdout.write('{} ({!r})\n'
                               .format(work_unit_name, status['status']))
             if 'expiration' in status:
                 when = time.ctime(status['expiration'])
@@ -450,7 +500,10 @@ class Manager(ArgParseCmd):
                 else:
                     self.stdout.write('  Expires: {}\n'.format(when))
             if 'worker_id' in status:
-                heartbeat = self.task_master.get_heartbeat(status['worker_id'])
+                try:
+                    heartbeat = self.task_master.get_heartbeat(status['worker_id'])
+                except:
+                    heartbeat = None
                 if heartbeat:
                     hostname = (heartbeat.get('fqdn', None) or
                                 heartbeat.get('hostname', None) or
@@ -486,8 +539,10 @@ class Manager(ArgParseCmd):
         try:
             if args.all:
                 while True:
-                    units = self.task_master.list_failed_work_units(
-                        work_spec_name, limit=1000)
+                    units = self.task_master.get_work_units(
+                        work_spec_name, limit=1000,
+                        state=self.task_master.FAILED)
+                    units = [u[0] for u in units]  # just need wu key
                     if not units: break
                     try:
                         self.task_master.retry(work_spec_name, *units)
@@ -537,21 +592,24 @@ class Manager(ArgParseCmd):
         units = args.unit or None
         # What to do?
         count = 0
-        if args.status == 'available' or args.status is None:
-            count += self.task_master.remove_available_work_units(
-                work_spec_name, units)
-        if args.status == 'pending' or args.status is None:
-            count += self.task_master.remove_pending_work_units(
-                work_spec_name, units)
-        if args.status == 'blocked' or args.status is None:
-            count += self.task_master.remove_blocked_work_units(
-                work_spec_name, units)
-        if args.status == 'finished' or args.status is None:
-            count += self.task_master.remove_finished_work_units(
-                work_spec_name, units)
-        if args.status == 'failed' or args.status is None:
-            count += self.task_master.remove_failed_work_units(
-                work_spec_name, units)
+        if args.status is None:
+            all = units is None
+            count += self.task_master.del_work_units(work_spec_name, work_unit_keys=units, all=all)
+        elif args.status == 'available':
+            count += self.task_master.del_work_units(
+                work_spec_name, work_unit_keys=units, state=self.task_master.AVAILABLE)
+        elif args.status == 'pending':
+            count += self.task_master.del_work_units(
+                work_spec_name, work_unit_keys=units, state=self.task_master.PENDING)
+        elif args.status == 'blocked':
+            count += self.task_master.del_work_units(
+                work_spec_name, work_unit_keys=units, state=self.task_master.BLOCKED)
+        elif args.status == 'finished':
+            count += self.task_master.del_work_units(
+                work_spec_name, work_unit_keys=units, state=self.task_master.FINISHED)
+        elif args.status == 'failed':
+            count += self.task_master.del_work_units(
+                work_spec_name, work_unit_keys=units, state=self.task_master.FAILED)
         self.stdout.write('Removed {} work units.\n'.format(count))
 
     def args_mode(self, parser):

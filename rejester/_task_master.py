@@ -972,6 +972,41 @@ class TaskMaster(object):
                                         *work_unit_names)
         return count
 
+    def del_work_units(self, work_spec_name, work_unit_keys=None,
+                       state=None, all=False):
+        '''Delete work units from a work spec.
+
+        The parameters are considered in order as follows:
+
+        * If `all` is :const:`True`, then all work units in
+          `work_spec_name` are deleted; otherwise
+        * If `state` is not :const:`None`, then all work units
+          in the named state are deleted; otherwise
+        * If `work_unit_keys` are specified, then those specific
+          work units are deleted; otherwise
+        * Nothing is deleted.
+
+        :param str work_spec_name: name of the work spec
+        :param list work_unit_keys: if not :const:`None`, only delete
+          these specific keys
+        :param str state: only delete work units in this state
+        :param bool all: if true, delete all work units
+        :return: number of work units deleted
+
+        '''
+        count = 0
+        if (state is None) or (state == AVAILABLE):
+            count += self.remove_available_work_units(work_spec_name, work_unit_keys)
+        if (state is None) or (state == PENDING):
+            count += self.remove_pending_work_units(work_spec_name, work_unit_keys)
+        if (state is None) or (state == BLOCKED):
+            count += self.remove_blocked_work_units(work_spec_name, work_unit_keys)
+        if (state is None) or (state == FAILED):
+            count += self.remove_failed_work_units(work_spec_name, work_unit_keys)
+        if (state is None) or (state == FINISHED):
+            count += self.remove_finished_work_units(work_spec_name, work_unit_keys)
+        return count
+
     def remove_available_work_units(self, work_spec_name, work_unit_names):
         '''Remove some work units in the available queue.
 

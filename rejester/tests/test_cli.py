@@ -160,12 +160,12 @@ def test_work_spec_bad(manager, loaded, tmpdir):
         manager.runcmd('work_spec', ['-w', str(tmpdir.join('missing'))])
 
 def test_work_spec_by_name(manager, loaded, work_spec):
-    manager.runcmd('work_spec', ['-W', work_spec['name']])
+    manager.runcmd('work_spec', ['-W', work_spec['name'], '--json'])
     spec = json.loads(manager.stdout.getvalue())
     assert spec == work_spec
 
 def test_work_spec_by_file(manager, loaded, work_spec, work_spec_path):
-    manager.runcmd('work_spec', ['-w', work_spec_path])
+    manager.runcmd('work_spec', ['-w', work_spec_path, '--json'])
     spec = json.loads(manager.stdout.getvalue())
     assert spec == work_spec
 
@@ -414,7 +414,9 @@ def test_clear_by_name(manager, loaded, work_spec, work_units):
     assert (manager.task_master.num_available(work_spec['name']) ==
             len(work_units))
     a_key = work_units.keys()[0]
-    manager.runcmd('clear', ['-W', work_spec['name'], a_key])
+    cmd = ['-W', work_spec['name'], a_key]
+    manager.runcmd('clear', cmd)
+    logger.info('cmd %r', cmd)
     assert (manager.task_master.num_available(work_spec['name']) ==
             len(work_units) - 1)
     assert (manager.stdout.getvalue() == 'Removed 1 work units.\n')
