@@ -38,7 +38,6 @@ use this worker infrastructure at all.
 
 '''
 from __future__ import absolute_import
-from collections import deque
 import errno
 import logging
 import multiprocessing
@@ -52,7 +51,7 @@ import struct
 import sys
 import threading
 import time
-import uuid
+import traceback
 
 from setproctitle import setproctitle
 
@@ -61,22 +60,23 @@ import rejester
 from rejester._task_master import build_task_master
 from rejester import Worker
 from rejester.exceptions import LostLease
-from rejester._task_master import WORKER_OBSERVED_MODE, WORKER_STATE_
 from rejester._registry import nice_identifier
 import yakonfig
 
 logger = logging.getLogger(__name__)
 
+
 def test_work_program(work_unit):
-    ## just to show that this works, we get the config from the data
-    ## and *reconnect* to the registry with a second instances instead
-    ## of using work_unit.registry
+    # just to show that this works, we get the config from the data
+    # and *reconnect* to the registry with a second instances instead
+    # of using work_unit.registry
     config = work_unit.data['config']
     sleeptime = float(work_unit.data.get('sleep', 9.0))
     task_master = build_task_master(config)
     logger.info('executing work_unit %r ... %s', work_unit.key, sleeptime)
     time.sleep(sleeptime)  # pretend to work
     logger.info('finished %r' % work_unit)
+
 
 def run_worker(worker_class, *args, **kwargs):
     '''Bridge function to run a worker under :mod:`multiprocessing`.
@@ -96,14 +96,14 @@ def run_worker(worker_class, *args, **kwargs):
     '''
     try:
         worker = worker_class(*args, **kwargs)
-    except Exception, exc:
+    except Exception:
         logger.critical('failed to create worker {!r}'.format(worker_class),
                         exc_info=True)
         raise
     try:
         worker.register()
         worker.run()
-    except Exception, exc:
+    except Exception:
         logger.error('worker {!r} died'.format(worker_class), exc_info=True)
         raise
     finally:
@@ -149,7 +149,7 @@ class HeadlessWorker(Worker):
             signal.signal(sig_num, self.terminate)
         self.work_unit = self.task_master.get_assigned_work_unit(
             worker_id, work_spec_name, work_unit_key)
-        ## carry this to overwrite self.worker_id after .register()
+        # carry this to overwrite self.worker_id after .register()
         self._pre_assigned_worker_id = worker_id
 
     def register(self):
@@ -164,9 +164,10 @@ class HeadlessWorker(Worker):
         self.work_unit.terminate()
         sys.exit()
 
+
 class MultiWorker(Worker):
     '''Parent worker that runs multiple jobs continuously.
-    
+
     This uses :mod:`multiprocessing` to run one child
     :class:`HeadlessWorker` per core on the system, and averages
     system memory to report `available_gb`.  This class manages the
@@ -926,5 +927,9 @@ class ForkWorker(Worker):
                                  'stopping in response to signal')
                         break
                 time.sleep(interval)
+        except Exception:
+            self.log(logging.CRITICAL,
+                     'uncaught exception in worker: ' + traceback.format_exc())
         finally:
+            self.stop_all_children()
             self.clear_signal_handlers()
