@@ -100,15 +100,26 @@ def run_worker(worker_class, *args, **kwargs):
         logger.critical('failed to create worker {!r}'.format(worker_class),
                         exc_info=True)
         raise
+    # A note on style here:
+    #
+    # If this runs ForkWorker, ForkWorker will os.fork() LoopWorker
+    # (or SingleWorker) children, and the child will have this in its
+    # call stack.  Eventually the child will sys.exit(), which raises
+    # SystemExit, which is an exception that will trickle back through
+    # here.  If there is a try:...finally: block, the finally: block
+    # will execute on every child exit.  except Exception: won't run
+    # on SystemExit.
     try:
         worker.register()
         worker.run()
+        worker.unregister()
     except Exception:
         logger.error('worker {!r} died'.format(worker_class), exc_info=True)
+        try:
+            worker.unregister()
+        except:
+            pass
         raise
-    finally:
-        logger.debug('preparing to worker.unregister() for %r', worker)
-        worker.unregister()
 
 
 class HeadlessWorker(Worker):
@@ -446,7 +457,7 @@ class LoopWorker(SingleWorker):
         :return: :const:`True` if there was a job (even if it failed)
 
         '''
-        return self.run_one(set_title)
+        return self.run_loop(set_title)
 
     def run_loop(self, set_title=False):
         # Find our deadline from the global configuration.
@@ -931,5 +942,7 @@ class ForkWorker(Worker):
             self.log(logging.CRITICAL,
                      'uncaught exception in worker: ' + traceback.format_exc())
         finally:
-            self.stop_all_children()
+            # See the note in run_workers() above.  clear_signal_handlers()
+            # calls signal.signal() which explicitly affects the current
+            # process, parent or child.
             self.clear_signal_handlers()
