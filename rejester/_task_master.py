@@ -4,17 +4,16 @@
    Copyright 2012-2014 Diffeo, Inc.
 
 '''
-from __future__ import absolute_import
-from __future__ import division
+from __future__ import absolute_import, division
 import abc
-import uuid
-import time
 import logging
-import psutil
-import random
-import socket
-import traceback
+import os
 import pkg_resources
+import random
+import psutil
+import socket
+import time
+import traceback
 
 from rejester._registry import Registry, nice_identifier
 from rejester.exceptions import ProgrammerError, LockError, \
@@ -31,6 +30,7 @@ _BLOCKS = '_BLOCKS'
 _DEPENDS = '_DEPENDS'
 _FINISHED = '_FINISHED'
 _FAILED = '_FAILED'
+WORKER_CHILDREN_ = 'WORKER_CHILDREN_'
 WORKER_STATE_ = 'WORKER_STATE_'
 WORKER_OBSERVED_MODE = 'WORKER_OBSERVED_MODE'
 ACTIVE_LEASES = 'ACTIVE_LEASES'
@@ -99,8 +99,10 @@ class Worker(object):
             self.task_master = build_task_master(self.config)
         #: Worker ID, only valid after :meth:`register`
         self.worker_id = None
+        #: Parent worker ID
+        self.parent = None
         #: Required maximum time between :meth:`heartbeat`
-        self.lifetime = 300 * 20 ## 100 minutes
+        self.lifetime = 300 * 20  # 100 minutes
 
     def environment(self):
         '''Get raw data about this worker.
@@ -111,22 +113,45 @@ class Worker(object):
         ``working_set``, and ``memory``.
 
         '''
-        hostname, aliases, ipaddrs = socket.gethostbyaddr(socket.gethostname())
+        hostname = socket.gethostname()
+        aliases = ()
+        ipaddrs = ()
+
+        # This sequence isn't 100% reliable.  We might try a socket()
+        # sequence like RedisBase._ipaddress(), or just decide that
+        # socket.fqdn() and/or socket.gethostname() is good enough.
+        try:
+            ip = socket.gethostbyname(hostname)
+        except socket.herror:
+            # If you're here, then $(hostname) doesn't resolve.
+            ip = None
+
+        try:
+            if ip is not None:
+                hostname, aliases, ipaddrs = socket.gethostbyaddr(ip)
+        except socket.herror:
+            # If you're here, then $(hostname) resolves, but the IP
+            # address that results in doesn't reverse-resolve.  This
+            # has been observed on OSX at least.
+            ipaddrs = (ip,)
+
         env = dict(
-            worker_id = self.worker_id,
-            hostname = hostname,
-            aliases = tuple(aliases),
-            ipaddrs = tuple(ipaddrs),
-            fqdn = socket.getfqdn(),
-            version = pkg_resources.get_distribution("rejester").version, # pylint: disable=E1103
-            working_set = [(dist.key, dist.version) for dist in pkg_resources.WorkingSet()], # pylint: disable=E1103
-            #config_hash = self.config['config_hash'],
-            #config_json = self.config['config_json'],
-            memory = psutil.virtual_memory(),
+            worker_id=self.worker_id,
+            parent=self.parent,
+            hostname=hostname,
+            aliases=tuple(aliases),
+            ipaddrs=tuple(ipaddrs),
+            fqdn=socket.getfqdn(),
+            version=pkg_resources.get_distribution("rejester").version, # pylint: disable=E1103
+            working_set=[(dist.key, dist.version) for dist in pkg_resources.WorkingSet()], # pylint: disable=E1103
+            # config_hash=self.config['config_hash'],
+            # config_json = self.config['config_json'],
+            memory=psutil.virtual_memory(),
+            pid=os.getpid(),
         )
         return env
 
-    def register(self):
+    def register(self, parent=None):
         '''Record the availability of this worker and get a unique identifer.
 
         This sets :attr:`worker_id` and calls :meth:`heartbeat`.  This
@@ -136,6 +161,7 @@ class Worker(object):
         '''
         if self.worker_id:
             raise ProgrammerError('Worker.register cannot be called again without first calling unregister; it is not idempotent')
+        self.parent = parent
         self.worker_id = nice_identifier()
         self.task_master.worker_id = self.worker_id
         self.heartbeat()
@@ -159,9 +185,11 @@ class Worker(object):
 
         :returns mode: Current mode, as :meth:`TaskMaster.get_mode`
 
-        ''' 
+        '''
         mode = self.task_master.get_mode()
-        self.task_master.worker_heartbeat(self.worker_id, mode, self.lifetime, self.environment())
+        self.task_master.worker_heartbeat(self.worker_id, mode,
+                                          self.lifetime, self.environment(),
+                                          parent=self.parent)
         return mode
 
     @abc.abstractmethod
@@ -576,7 +604,7 @@ class TaskMaster(object):
 
         :param dict config: Configuration for the task master, generally
           the contents of the ``rejester`` block in the global configuration
-        
+
         '''
         config['app_name'] = 'rejester'
         #: Configuration for the task master
@@ -618,7 +646,7 @@ class TaskMaster(object):
         :raise rejester.exceptions.ProgrammerError: on invalid `mode`
 
         '''
-        if not mode in [self.TERMINATE, self.RUN, self.IDLE]:
+        if mode not in [self.TERMINATE, self.RUN, self.IDLE]:
             raise ProgrammerError('mode=%r is not recognized' % mode)
         with self.registry.lock(identifier=self.worker_id) as session:
             session.set('modes', 'mode', mode)
@@ -684,7 +712,7 @@ class TaskMaster(object):
 
         '''
         return self.registry.filter(
-            WORKER_OBSERVED_MODE, 
+            WORKER_OBSERVED_MODE,
             priority_min=alive and time.time() or '-inf')
 
     def get_heartbeat(self, worker_id):
@@ -1538,15 +1566,14 @@ class TaskMaster(object):
                         )
                         break
 
-        except (LockError, EnvironmentError), exc:
+        except (LockError, EnvironmentError):
             logger.error('took to long to get work', exc_info=True)
 
         logger.debug('get_work %r', work_unit)
         return work_unit
 
-    def get_assigned_work_unit(
-            self, worker_id, work_spec_name, work_unit_key,
-        ):
+    def get_assigned_work_unit(self, worker_id, work_spec_name,
+                               work_unit_key):
         '''get a specific WorkUnit that has already been assigned to a
         particular worker_id
         '''
@@ -1554,16 +1581,15 @@ class TaskMaster(object):
             assigned_work_unit_key = session.get(
                 WORK_UNITS_ + work_spec_name + '_locks', worker_id)
             if not assigned_work_unit_key == work_unit_key:
-                ## raise LostLease instead of EnvironmentError, so
-                ## users of TaskMaster can have a single type of
-                ## expected exception, rather than two
+                # raise LostLease instead of EnvironmentError, so
+                # users of TaskMaster can have a single type of
+                # expected exception, rather than two
                 raise LostLease(
                     'assigned_work_unit_key=%r != %r'
                     % (assigned_work_unit_key, work_unit_key))
-            ## could trap EnvironmentError and raise LostLease instead
-            work_unit_data = session.get(
-                        WORK_UNITS_ + work_spec_name,
-                        work_unit_key)
+            # could trap EnvironmentError and raise LostLease instead
+            work_unit_data = session.get(WORK_UNITS_ + work_spec_name,
+                                         work_unit_key)
             return WorkUnit(
                 self.registry, work_spec_name,
                 work_unit_key, work_unit_data,
@@ -1571,11 +1597,64 @@ class TaskMaster(object):
                 default_lifetime=self.default_lifetime,
             )
 
-    def worker_register(self, worker_id, mode=None, lifetime=6000, environment=None):
-        # actually the same as heartbeat, just, "hello, I'm here"
-        self.worker_heartbeat(worker_id, mode, lifetime, environment)
+    def get_child_work_units(self, worker_id):
+        '''Get work units assigned to a worker's children.
 
-    def worker_heartbeat(self, worker_id, mode=None, lifetime=6000, environment=None):
+        Returns a dictionary mapping worker ID to :class:`WorkUnit`.
+        If a child exists but is idle, that worker ID will map to
+        :const:`None`.  The work unit may already be expired or
+        assigned to a different worker; this will be reflected in
+        the returned :class:`WorkUnit`.
+
+        This may write back to the underlying data store to clean up
+        stale children that have not unregistered themselves but
+        no longer exist in any form.
+
+        '''
+        result = {}
+        with self.registry.lock(identifier=worker_id) as session:
+            all_children = session.pull(WORKER_CHILDREN_ + worker_id)
+            # The data stored in Redis isn't actually conducive to
+            # this specific query; we will need to scan each work spec
+            # for each work unit
+            work_specs = session.pull(WORK_SPECS)
+            for child in all_children.iterkeys():
+                work_spec_name = None
+                for spec in work_specs.iterkeys():
+                    work_unit_key = session.get(
+                        WORK_UNITS_ + spec + '_locks', child)
+                    if work_unit_key:
+                        work_spec_name = spec
+                        break
+                if work_spec_name:
+                    assigned = session.get(
+                        WORK_UNITS_ + work_spec_name + '_locks',
+                        work_unit_key)
+                    (data, expires) = session.get(
+                        WORK_UNITS_ + work_spec_name, work_unit_key,
+                        include_priority=True)
+                    result[child] = WorkUnit(
+                        self.registry, work_spec_name, work_unit_key,
+                        data, expires=expires, worker_id=assigned)
+                else:
+                    # The child isn't doing anything.  Does it still
+                    # exist?
+                    heartbeat = session.get(WORKER_OBSERVED_MODE, child)
+                    if heartbeat:
+                        result[child] = None
+                    else:
+                        session.popmany(WORKER_CHILDREN_ + worker_id,
+                                        child)
+        return result
+
+    def worker_register(self, worker_id, mode=None, lifetime=6000,
+                        environment=None, parent=None):
+        # actually the same as heartbeat, just, "hello, I'm here"
+        self.worker_heartbeat(worker_id, mode, lifetime, environment,
+                              parent)
+
+    def worker_heartbeat(self, worker_id, mode=None, lifetime=6000,
+                         environment=None, parent=None):
         if environment is None:
             environment = {}
         with self.registry.lock(identifier=worker_id) as session:
@@ -1583,9 +1662,14 @@ class TaskMaster(object):
                         priority=time.time() + lifetime)
             session.update(WORKER_STATE_ + worker_id, environment,
                            expire=lifetime)
+            if parent:
+                session.update(WORKER_CHILDREN_ + parent,
+                               {worker_id: 1})
 
-    def worker_unregister(self, worker_id):
-        with self.registry.lock(
-                identifier=worker_id) as session:
+    def worker_unregister(self, worker_id, parent=None):
+        with self.registry.lock(identifier=worker_id) as session:
             session.delete(WORKER_STATE_ + worker_id)
+            session.delete(WORKER_CHILDREN_ + worker_id)
             session.popmany(WORKER_OBSERVED_MODE, worker_id)
+            if parent:
+                session.popmany(WORKER_CHILDREN_ + parent, worker_id)

@@ -408,7 +408,7 @@ class SingleWorker(Worker):
     EXIT_BORED = 2
 
     @classmethod
-    def as_child(cls, global_config):
+    def as_child(cls, global_config, parent=None):
         '''Run a single job in a child process.
 
         This method never returns; it always calls :func:`sys.exit`
@@ -421,9 +421,9 @@ class SingleWorker(Worker):
             yakonfig.set_default_config([yakonfig, dblogger, rejester],
                                         config=global_config)
             worker = cls(yakonfig.get_global_config(rejester.config_name))
-            worker.register()
+            worker.register(parent=parent)
             did_work = worker.run(set_title=True)
-            worker.unregister()
+            worker.unregister(parent=parent)
             if did_work:
                 sys.exit(cls.EXIT_SUCCESS)
             else:
@@ -471,11 +471,9 @@ class LoopWorker(SingleWorker):
             duration = 10
         deadline = now + duration
 
-        while True:
+        while time.time() < deadline:
             ret = self.run_one(set_title)
             if not ret:
-                break
-            if time.time() >= deadline:
                 break
 
         return ret
@@ -512,6 +510,8 @@ class ForkWorker(Worker):
             heartbeat_interval: 15
             # minimum time a working worker will live
             child_lifetime: 10
+            # kill off jobs this long before their deadlines
+            stop_jobs_early: 15
 
     This spawns child processes to do work.  Each child process does at
     most one work unit.  If `num_workers` is set, at most this many
@@ -542,10 +542,22 @@ class ForkWorker(Worker):
     recording its state and retrieving the global mode, every
     `heartbeat_interval`.
 
+    Every `heartbeat_interval` the parent also checks on the jobs its
+    children are running.  If any of them are overdue now or being
+    worked on by other workers, the parent will kill them to avoid
+    having multiple workers doing the same work unit.  Furthermore, if
+    any childrens' jobs will expire within `stop_jobs_early` seconds,
+    those jobs will be killed too even if they aren't expired yet, and
+    any jobs killed this way will be marked failed if they are still
+    owned by the same child worker.  If `stop_jobs_early` is at least
+    `heartbeat_interval`, this will reliably cause jobs that take
+    longer than the expiry interval (default 300 seconds) to be killed
+    off rather than retried.
+
     '''
-    
+
     '''Several implementation notes:
-    
+
     fork() and logging don't mix.  While we're better off here than
     using :mod:`multiprocessing` (which forks from a thread, so the
     child can start up with a log handler locked) there are still
@@ -571,6 +583,7 @@ class ForkWorker(Worker):
         'spawn_interval': 0.01,
         'heartbeat_interval': 15,
         'child_lifetime': 10,
+        'stop_jobs_early': 15,
         'debug_worker': None,
     }
 
@@ -605,6 +618,7 @@ class ForkWorker(Worker):
         self.heartbeat_interval = self.config_get(c, 'heartbeat_interval')
         self.heartbeat_deadline = time.time() - 1  # due now
         self.child_lifetime = self.config_get(c, 'child_lifetime')
+        self.stop_jobs_early = self.config_get(c, 'stop_jobs_early')
         self.debug_worker = c.get('debug_worker', [])
         self.children = set()
         self.log_child = None
@@ -769,7 +783,7 @@ class ForkWorker(Worker):
 
         self.debug('loop', 'starting work loop, can_start_more={!r}'
                    .format(can_start_more))
-        
+
         # See if anyone has died
         while True:
             try:
@@ -840,7 +854,8 @@ class ForkWorker(Worker):
                 self.clear_signal_handlers()
                 if self.log_fd:
                     os.close(self.log_fd)
-                LoopWorker.as_child(yakonfig.get_global_config())
+                LoopWorker.as_child(yakonfig.get_global_config(),
+                                    parent=self.worker_id)
                 # This should never return, but just in case
                 sys.exit(SingleWorker.EXIT_EXCEPTION)
             else:
@@ -854,6 +869,30 @@ class ForkWorker(Worker):
         # of our potential workers and they're doing work
         self.debug('loop', 'exit work loop with full system')
         return self.poll_interval
+
+    def check_spinning_children(self):
+        '''Stop children that are working on overdue jobs.'''
+        child_jobs = self.task_master.get_child_work_units(self.worker_id)
+        # We will kill off any jobs that are due before "now".  This
+        # isn't really now now, but now plus a grace period to make
+        # sure spinning jobs don't get retried.
+        now = time.time() + self.stop_jobs_early
+        for child, wu in child_jobs.iteritems():
+            if wu.worker_id == child and wu.expires > now:
+                # We are still working on a not-overdue job
+                continue
+            # So either someone else is doing its work or it's just overdue
+            environment = self.task_master.get_heartbeat(child)
+            if 'pid' not in environment:
+                continue  # derp
+            if environment['pid'] not in self.children:
+                continue  # derp
+            os.kill(environment['pid'], signal.SIGTERM)
+            # This will cause the child to die, and do_some_work will
+            # reap it; but we'd also like the job to fail if possible
+            if wu.worker_id == child:
+                wu.data['traceback'] = 'job expired'
+                wu.fail()
 
     def stop_gracefully(self):
         '''Refuse to start more processes.
@@ -922,6 +961,7 @@ class ForkWorker(Worker):
                         self.last_mode = mode
                     self.heartbeat_deadline = (time.time() +
                                                self.heartbeat_interval)
+                    self.check_spinning_children()
                 else:
                     mode = self.last_mode
                 if mode != self.task_master.RUN:

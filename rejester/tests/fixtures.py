@@ -1,5 +1,8 @@
 """py.test support for rejester
 
+.. This software is released under an MIT/X11 open source license.
+   Copyright 2012-2014 Diffeo, Inc.
+
 Purpose
 =======
 
@@ -28,12 +31,6 @@ one of the high-level objects.  If you must manually work with the
 namespace string outside of the managed objects, you can call
 ``make_namespace_string()`` or depend on the ``namespace_string``
 fixture.
-
------
-
-This software is released under an MIT/X11 open source license.
-
-Copyright 2012-2014 Diffeo, Inc.
 
 """
 

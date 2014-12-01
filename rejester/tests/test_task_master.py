@@ -201,20 +201,87 @@ def test_task_master_lost_lease(task_master):
         work_unit1.update()
 
 
-@pytest.mark.performance
-def test_task_master_throughput(task_master):
-    '''exercises TaskMaster by pumping a million records through it
-    '''
-    num_units = 10**6
-    work_units = {str(x): {str(x): ' ' * 30} for x in xrange(num_units)}
+def test_worker_child(task_master):
+    '''test the basic parent/child worker interface'''
+    task_master.worker_register('child', mode=task_master.get_mode(),
+                                parent='parent')
+    try:
+        assert task_master.get_child_work_units('parent') == {'child': None}
+        assert task_master.get_child_work_units('child') == {}
 
-    start = time.time()
-    task_master.update_bundle(work_spec, work_units)
-    elapsed = time.time() - start
-    logger.info('%d work_units pushed in %.1f seconds --> %.1f units/sec',
-                num_units, elapsed, num_units / elapsed)
+        task_master.update_bundle(work_spec, {'k': {'kk': 'vv'}})
+        wu = task_master.get_work('child', available_gb=13)
+        assert wu is not None
+        assert wu.key == 'k'
 
-    assert len(task_master.registry.pull(WORK_UNITS_ + work_spec['name'])) == num_units
+        cwus = task_master.get_child_work_units('parent')
+        assert cwus.keys() == ['child']
+        cwu = cwus['child']
+        assert cwu.worker_id == 'child'
+        assert cwu.work_spec_name == work_spec['name']
+        assert cwu.key == wu.key
+        assert cwu.expires == wu.expires
 
-    work_unit = task_master.get_work('fake_worker_id', available_gb=13)
-    assert work_unit.key in work_units
+        assert task_master.get_child_work_units('child') == {}
+    finally:
+        task_master.worker_unregister('child', parent='parent')
+
+
+def test_worker_child_expiry(task_master):
+    '''test the parent/child interface when a job expires'''
+    task_master.worker_register('child', mode=task_master.get_mode(),
+                                parent='parent')
+    try:
+        assert task_master.get_child_work_units('parent') == {'child': None}
+        assert task_master.get_child_work_units('child') == {}
+
+        task_master.update_bundle(work_spec, {'k': {'kk': 'vv'}})
+        wu = task_master.get_work('child', available_gb=13, lease_time=1)
+        assert wu is not None
+        assert wu.key == 'k'
+
+        time.sleep(2)
+        # Now the job is technically expired
+
+        cwus = task_master.get_child_work_units('parent')
+        assert cwus.keys() == ['child']
+        cwu = cwus['child']
+        assert cwu.worker_id == 'child'
+        assert cwu.work_spec_name == work_spec['name']
+        assert cwu.key == wu.key
+        assert cwu.expires == wu.expires
+
+        assert task_master.get_child_work_units('child') == {}
+    finally:
+        task_master.worker_unregister('child', parent='parent')
+
+
+def test_worker_child_stolen(task_master):
+    '''test the parent/child interface when a job expires'''
+    task_master.worker_register('child', mode=task_master.get_mode(),
+                                parent='parent')
+    try:
+        assert task_master.get_child_work_units('parent') == {'child': None}
+        assert task_master.get_child_work_units('child') == {}
+
+        task_master.update_bundle(work_spec, {'k': {'kk': 'vv'}})
+        wu = task_master.get_work('child', available_gb=13, lease_time=1)
+        assert wu is not None
+        assert wu.key == 'k'
+
+        time.sleep(2)
+        wu = task_master.get_work('thief', available_gb=13)
+        assert wu is not None
+        assert wu.key == 'k'
+
+        cwus = task_master.get_child_work_units('parent')
+        assert cwus.keys() == ['child']
+        cwu = cwus['child']
+        assert cwu.worker_id == 'thief'
+        assert cwu.work_spec_name == work_spec['name']
+        assert cwu.key == wu.key
+        assert cwu.expires == wu.expires
+
+        assert task_master.get_child_work_units('child') == {}
+    finally:
+        task_master.worker_unregister('child', parent='parent')
