@@ -878,6 +878,10 @@ class ForkWorker(Worker):
         # sure spinning jobs don't get retried.
         now = time.time() + self.stop_jobs_early
         for child, wu in child_jobs.iteritems():
+            if wu is None:
+                # This worker is idle, but oddly, still present; it should
+                # clean up after itself
+                continue
             if wu.worker_id == child and wu.expires > now:
                 # We are still working on a not-overdue job
                 continue
