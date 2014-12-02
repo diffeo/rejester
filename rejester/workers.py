@@ -423,7 +423,7 @@ class SingleWorker(Worker):
             worker = cls(yakonfig.get_global_config(rejester.config_name))
             worker.register(parent=parent)
             did_work = worker.run(set_title=True)
-            worker.unregister(parent=parent)
+            worker.unregister()
             if did_work:
                 sys.exit(cls.EXIT_SUCCESS)
             else:
