@@ -259,6 +259,9 @@ class WorkUnit(object):
         #: Name of the work unit
         self.key = key
         #: Data provided for the work unit
+        if not isinstance(data, dict):
+            raise Exception('WorkUnit must be given a dict() for data, otherwise '
+                            'exceptions will not get passed back up')
         self.data = data
         #: Has this work unit called :meth:`finish`?
         self.finished = False
@@ -1633,6 +1636,12 @@ class TaskMaster(object):
                     (data, expires) = session.get(
                         WORK_UNITS_ + work_spec_name, work_unit_key,
                         include_priority=True)
+                    if data is None:
+                        raise Exception(
+                            'got data=None and expires=%r from '
+                            'session.get(%r, %r, include_priority=True)' % (
+                                expires,
+                                WORK_UNITS_ + work_spec_name, work_unit_key))
                     result[child] = WorkUnit(
                         self.registry, work_spec_name, work_unit_key,
                         data, expires=expires, worker_id=assigned)
