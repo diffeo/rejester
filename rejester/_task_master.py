@@ -1637,13 +1637,11 @@ class TaskMaster(object):
                         WORK_UNITS_ + work_spec_name, work_unit_key,
                         include_priority=True)
                     if data is None:
-                        logger.critical(
+                        raise Exception(
                             'got data=None and expires=%r from '
                             'session.get(%r, %r, include_priority=True)' % (
                                 expires,
                                 WORK_UNITS_ + work_spec_name, work_unit_key))
-                        ## maybe if we just don't do anything, it will be okay?
-                        continue
                     result[child] = WorkUnit(
                         self.registry, work_spec_name, work_unit_key,
                         data, expires=expires, worker_id=assigned)
