@@ -355,6 +355,10 @@ class SingleWorker(Worker):
     which calls :meth:`as_child`.
 
     '''
+    def __init__(self, config, task_master=None, work_spec_names=None):
+        super(SingleWorker, self).__init__(config, task_master)
+        self.work_spec_names = work_spec_names
+
     def run(self, set_title=False):
         '''Do some work.
 
@@ -381,7 +385,7 @@ class SingleWorker(Worker):
 
         '''
         available_gb = MultiWorker.available_gb()
-        unit = self.task_master.get_work(self.worker_id, available_gb)
+        unit = self.task_master.get_work(self.worker_id, available_gb, work_spec_names=self.work_spec_names)
         if unit is None:
             logger.info('No work to do; stopping.')
             return False

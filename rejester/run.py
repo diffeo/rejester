@@ -220,6 +220,7 @@ class Manager(ArgParseCmd):
     def __init__(self):
         ArgParseCmd.__init__(self)
         self.prompt = 'rejester> '
+        # storage for lazy config getter property self.config
         self._config = None
         self._task_master = None
         self.exitcode = 0
@@ -663,10 +664,11 @@ class Manager(ArgParseCmd):
                     self.stdout.write('  {}: {}\n'.format(hk, hv))
 
     def args_run_one(self, parser):
-        pass
+        parser.add_argument('--from-work-spec', action='append', default=[], help='workspec name to accept work from, may be repeated.')
     def do_run_one(self, args):
         '''run a single job'''
-        worker = SingleWorker(self.config, task_master=self.task_master)
+        work_spec_names = args.from_work_spec or None
+        worker = SingleWorker(self.config, task_master=self.task_master, work_spec_names=work_spec_names)
         worker.register()
         rc = False
         try:
