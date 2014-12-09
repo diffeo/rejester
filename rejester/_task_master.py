@@ -1630,7 +1630,6 @@ class TaskMaster(object):
                         work_spec_name = spec
                         break
 
-                data = None
                 if work_spec_name:
                     assigned = session.get(
                         WORK_UNITS_ + work_spec_name + '_locks',
@@ -1638,19 +1637,11 @@ class TaskMaster(object):
                     (data, expires) = session.get(
                         WORK_UNITS_ + work_spec_name, work_unit_key,
                         include_priority=True)
-                    if data is None:
-                        logger.critical(
-                            'got data=None and expires=%r from '
-                            'session.get(%r, %r, include_priority=True)\n'
-                            'Therefore should fail this work unit and '
-                            'kill the child... but cannot do that in current implementation?' % (
-                                expires,
-                                WORK_UNITS_ + work_spec_name, work_unit_key))
-
-                if data is not None:
+                    if data is None: data = {}
                     result[child] = WorkUnit(
                         self.registry, work_spec_name, work_unit_key,
                         data, expires=expires, worker_id=assigned)
+
                 else:
                     # The child isn't doing anything.  Does it still
                     # exist?
