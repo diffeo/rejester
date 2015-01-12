@@ -112,7 +112,7 @@ setup(
         'pyyaml',
         'redis',
         'psutil',
-        'python-daemon',
+        'python-daemon<2',
         'setproctitle',
         # ], tests_require=[
         'pexpect',
