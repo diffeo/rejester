@@ -196,12 +196,11 @@ def test_task_master_lost_lease(task_master, monkeypatch):
     work_units = dict(task_key_42=dict(data='hello'))
     task_master.update_bundle(work_spec, work_units)
 
-    # lease a WorkUnit with very short lease_time
     work_unit1 = task_master.get_work('fake_worker_id1', available_gb=13,
-                                      lease_time=1)
-    monkeypatch.setattr('time.time', lambda: 100000002)
+                                      lease_time=30)
+    monkeypatch.setattr('time.time', lambda: 100000060)
     work_unit2 = task_master.get_work('fake_worker_id2', available_gb=13,
-                                      lease_time=10)
+                                      lease_time=30)
 
     assert work_unit1.key == work_unit2.key
     assert work_unit1.worker_id == 'fake_worker_id1'
@@ -247,11 +246,11 @@ def test_worker_child_expiry(task_master, monkeypatch):
         assert task_master.get_child_work_units('child') == {}
 
         task_master.update_bundle(work_spec, {'k': {'kk': 'vv'}})
-        wu = task_master.get_work('child', available_gb=13, lease_time=1)
+        wu = task_master.get_work('child', available_gb=13, lease_time=30)
         assert wu is not None
         assert wu.key == 'k'
 
-        monkeypatch.setattr('time.time', lambda: 100000002)
+        monkeypatch.setattr('time.time', lambda: 100000060)
         # Now the job is technically expired
 
         cwus = task_master.get_child_work_units('parent')
@@ -277,11 +276,11 @@ def test_worker_child_stolen(task_master, monkeypatch):
         assert task_master.get_child_work_units('child') == {}
 
         task_master.update_bundle(work_spec, {'k': {'kk': 'vv'}})
-        wu = task_master.get_work('child', available_gb=13, lease_time=1)
+        wu = task_master.get_work('child', available_gb=13, lease_time=30)
         assert wu is not None
         assert wu.key == 'k'
 
-        monkeypatch.setattr('time.time', lambda: 100000002)
+        monkeypatch.setattr('time.time', lambda: 100000060)
         wu = task_master.get_work('thief', available_gb=13)
         assert wu is not None
         assert wu.key == 'k'
