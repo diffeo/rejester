@@ -179,6 +179,7 @@ import gzip
 import json
 import logging
 import os
+import pprint
 import sys
 import time
 
@@ -403,17 +404,20 @@ class Manager(ArgParseCmd):
         work_spec_name = self._get_work_spec_name(args)
         spec = self.task_master.get_work_spec(work_spec_name)
         if args.json:
-            self.stdout.write(json.dumps(spec, indent=4, sort_keys=True) + '\n')
+            self.stdout.write(json.dumps(spec, indent=4, sort_keys=True) +
+                              '\n')
         else:
             yaml.safe_dump(spec, self.stdout)
 
     def args_status(self, parser):
         self._add_work_spec_name_args(parser)
+
     def do_status(self, args):
         '''print the number of work units in an existing work spec'''
         work_spec_name = self._get_work_spec_name(args)
         status = self.task_master.status(work_spec_name)
-        self.stdout.write(json.dumps(status, indent=4, sort_keys=True) + '\n')
+        self.stdout.write(json.dumps(status, indent=4, sort_keys=True) +
+                          '\n')
 
     def args_summary(self, parser):
         pass
@@ -441,6 +445,7 @@ class Manager(ArgParseCmd):
                             help='print work units in STATUS')
         parser.add_argument('--details', action='store_true',
                             help='also print the contents of the work units')
+
     def do_work_units(self, args):
         '''list work units that have not yet completed'''
         work_spec_name = self._get_work_spec_name(args)
@@ -452,17 +457,20 @@ class Manager(ArgParseCmd):
                 return
         else:
             statusi = None
-        work_units = dict(self.task_master.get_work_units(work_spec_name, state=statusi, limit=args.limit))
+        work_units = dict(self.task_master.get_work_units(
+            work_spec_name, state=statusi, limit=args.limit))
         work_unit_names = sorted(work_units.keys())
-        if args.limit: work_unit_names = work_unit_names[:args.limit]
+        if args.limit:
+            work_unit_names = work_unit_names[:args.limit]
         for k in work_unit_names:
             if args.details:
                 tback = work_units[k].get('traceback', '')
                 if tback:
                     tback += '\n'
                     work_units[k]['traceback'] = 'displayed below'
-                self.stdout.write('{!r}: {}\n{}'
-                    .format(k, json.dumps(work_units[k], indent=4, sort_keys=True),
+                self.stdout.write(
+                    '{!r}: {}\n{}'
+                    .format(k, pprint.pformat(work_units[k], indent=4),
                             tback))
             else:
                 self.stdout.write('{}\n'.format(k))
@@ -473,6 +481,7 @@ class Manager(ArgParseCmd):
                             help='only print N work units')
         parser.add_argument('--details', action='store_true',
                             help='also print the contents of the work units')
+
     def do_failed(self, args):
         '''list failed work units (deprecated)'''
         args.status = 'failed'
@@ -482,6 +491,7 @@ class Manager(ArgParseCmd):
         self._add_work_spec_name_args(parser)
         parser.add_argument('unit', nargs='*',
                             help='work unit name(s)')
+
     def do_work_unit(self, args):
         '''print basic details about work units'''
         work_spec_name = self._get_work_spec_name(args)

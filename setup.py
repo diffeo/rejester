@@ -114,6 +114,7 @@ setup(
         'psutil',
         'python-daemon<2',
         'setproctitle',
+        'cbor',
         # ], tests_require=[
         'pexpect',
         'pytest',

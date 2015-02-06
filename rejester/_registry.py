@@ -1,26 +1,23 @@
-'''
-http://github.com/diffeo/rejester
+'''Redis dictionary wrapper interface for rejester.
 
-This software is released under an MIT/X11 open source license.
+.. This software is released under an MIT/X11 open source license.
+   Copyright 2012-2014 Diffeo, Inc.
 
-Copyright 2012-2014 Diffeo, Inc.
+.. autoclass:: Registry
+
 '''
 from __future__ import absolute_import
 import time
 import uuid
-import json
 import logging
 import os
 import random
-import socket
 import struct
-import atexit
 import contextlib
-from uuid import UUID
-from functools import wraps
 from collections import defaultdict
 from operator import mul
 
+import cbor
 import redis
 
 from rejester.exceptions import EnvironmentError, LockError, \
@@ -29,11 +26,13 @@ from rejester._redis import RedisBase
 
 logger = logging.getLogger(__name__)
 
+
 def nice_identifier():
     'do not use uuid.uuid4, because it can block'
     big = reduce(mul, struct.unpack('<LLLL', os.urandom(16)), 1)
     big = big % 2**128
     return uuid.UUID(int=big).hex
+
 
 class Registry(RedisBase):
     '''Store string-keyed dictionaries in Redis.
@@ -60,8 +59,7 @@ class Registry(RedisBase):
     some key.  The dictionary keys are also stored in a prioritized
     list.  This in effect provides two levels of dictionary, using the
     Redis key and the dictionary key.  The registry makes an effort to
-    store all types of object as values, potentially serializing them
-    into JSON.
+    store all types of object as values, serializing them into CBOR.
 
     '''
 
@@ -77,8 +75,19 @@ class Registry(RedisBase):
         '''
         super(Registry, self).__init__(config)
 
-        ## populated only when lock is acquired
+        # populated only when lock is acquired
         self._session_lock_identifier = None
+
+        # for CBOR encode/decode
+        # http://www.iana.org/assignments/cbor-tags/cbor-tags.xhtml
+        # 37 is UUID; 128 is unassigned
+        self._tag_mapper = cbor.TagMapper(class_tags=[
+            cbor.ClassTag(37, uuid.UUID,
+                          encode_function=lambda u: u.bytes,
+                          decode_function=lambda b: uuid.UUID(bytes=b)),
+            cbor.ClassTag(128, tuple,
+                          encode_function=list, decode_function=tuple),
+        ], raise_on_unknown_tag=True)
 
     def _conn(self):
         '''debugging aid to easily grab a connection from the connection pool
@@ -118,7 +127,6 @@ class Registry(RedisBase):
         logger.warn('failed to acquire lock %s for %f seconds',
                     self._lock_name, atime)
         return False
-
 
     def re_acquire_lock(self, ltime=5):
         '''Re-acquire the lock.
@@ -233,57 +241,24 @@ class Registry(RedisBase):
         return redis.Redis(connection_pool=self.pool).delete(self._lock_name)
 
     def _encode(self, data):
-        '''Redis hash's store strings in the keys and values.  Since we want
-        to store UUIDs and tuples of UUIDs, we cannot just use json.
-        Instead, we employ a very simply decoding to turn various
-        strings into datatypes we understand.
+        '''Convert an object to a flat string.
+
+        This simply converts `data` to CBOR format, using tag values
+        128 and 129 to represent tuples and UUIDs, respectively.
+
         '''
-        if isinstance(data, tuple):
-            return 't:' + '-'.join([self._encode(item) for item in data])
-        elif isinstance(data, UUID):
-            return 'u:' + str(data.int)
-        else:
-            try:
-                return 'j:' + json.dumps(data)
-            except Exception, exc:
-                logger.error('Fail to encode data %r', data, exc_info=True)
-                raise TypeError
+        if data is None:
+            return ''
+        return self._tag_mapper.dumps(data)
 
     def _decode(self, string):
-        '''Redis hash's store strings in the keys and values.  Since we want
-        to store UUIDs and tuples of UUIDs, we cannot just use json.
-        Instead, we employ a very simply decoding to turn various
-        strings into datatypes we understand.
+        '''Convert a flat string to an object.
 
-        Note, that redis would convert things into a string
-        representation that we could 'eval' here, but it is not a good
-        practice from a security standpoint to eval data from a
-        database.
+        This undoes :meth:`_encode`.
         '''
-        if len(string) == 0:
+        if string == '':
             return None
-        if string[0] == 't':
-            return tuple([self._decode(item) for item in
-                          string[2:].split('-')])
-        elif string[0] == 'u':
-            return UUID(int=int(string[2:]))
-        elif string[0] == 'j':
-            try:
-                if string[2:]:
-                    return json.loads(string[2:])
-                else:
-                    None
-            except ValueError, exc:
-                logger.critical('%r --> tried to json.loads(%r)', string, string[2:], exc_info=True)
-                raise
-        else:
-            try:
-                return float(string)
-            except:
-                pass
-            ## Raise a type error on all other types of data
-            logger.error('Fail to decode string %r', string, exc_info=True)
-            raise TypeError
+        return self._tag_mapper.loads(string)
 
     def update(self, dict_name, mapping=None, priorities=None, expire=None,
                locks=None):
@@ -1019,21 +994,3 @@ class Registry(RedisBase):
         args = args[2:]
         func = getattr(conn, command)
         return func(key, *args)
-
-
-    def increment(self, dict_name, key, value=1.0):
-        '''
-        increment the value stored at dict_name(key) by value
-        '''
-        conn = redis.Redis(connection_pool=self.pool)
-        if isinstance(value, int):
-            value = float(value)
-            ## while redis will allow you to go from int to float, you
-            ## cannot go back to using hincrby if a hash has floats in
-            ## it.
-            #conn.hincrby(self._namespace(dict_name), self._encode(key), value)
-        if isinstance(value, float):
-            conn.hincrbyfloat(self._namespace(dict_name), self._encode(key), value)
-        else:
-            raise TypeError('%r is not int or float' % value)
-

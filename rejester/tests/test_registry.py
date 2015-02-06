@@ -270,22 +270,6 @@ def test_registry_getitem_reset(registry):
         recovered2.add(session.getitem_reset('test_dict', priority_max=10, new_priority=20))
         recovered2.add(session.getitem_reset('test_dict', priority_max=10))
         assert recovered2 == set(test_dict.items())
-        
-    
-def test_registry_increment(registry):
-
-    with registry.lock(atime=5000) as session:
-        session.increment('test_dict', 'dog')
-        assert session.pull('test_dict') == dict(dog=1)
-
-        session.increment('test_dict', 'foo', 4)
-        assert session.pull('test_dict') == dict(dog=1, foo=4)
-        session.increment('test_dict', 'foo', 0.5)
-        assert session.pull('test_dict') == dict(dog=1, foo=4.5)
-        session.increment('test_dict', 'foo', 1)
-        assert session.pull('test_dict') == dict(dog=1, foo=5.5)
-        session.increment('test_dict', 'foo')
-        assert session.pull('test_dict') == dict(dog=1, foo=6.5)
 
 
 def test_registry_1to1(registry):
