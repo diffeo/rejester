@@ -391,7 +391,7 @@ class SingleWorker(Worker):
             return False
         try:
             if set_title:
-                setproctitle('rejester worker {} {}'
+                setproctitle('rejester worker {!r} {!r}'
                              .format(unit.work_spec_name, unit.key))
             unit.run()
             unit.finish()
