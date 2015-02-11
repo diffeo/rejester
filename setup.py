@@ -5,9 +5,7 @@ import sys
 import fnmatch
 import subprocess
 
-## prepare to run PyTest as a command
 from distutils.core import Command
-
 from setuptools import setup, find_packages
 
 from version import get_git_version
@@ -15,9 +13,11 @@ VERSION, SOURCE_LABEL = get_git_version()
 PROJECT = 'rejester'
 AUTHOR = 'Diffeo, Inc.'
 AUTHOR_EMAIL = 'support@diffeo.com'
-DESC = 'redis-based python client library and command line tools for managing tasks executed by a group of configurable workers'
+DESC = ('redis-based python client library and command line tools '
+        'for managing tasks executed by a group of configurable workers')
 LICENSE = 'MIT/X11 license http://opensource.org/licenses/MIT'
 URL = 'http://github.com/diffeo/rejester'
+
 
 def read_file(file_name):
     file_path = os.path.join(
@@ -103,30 +103,22 @@ setup(
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Topic :: Utilities',
-        'License :: OSI Approved :: MIT License',  ## MIT/X11 license http://opensource.org/licenses/MIT
+        # MIT/X11 license http://opensource.org/licenses/MIT
+        'License :: OSI Approved :: MIT License',
     ],
     install_requires=[
         'dblogger >= 0.4.0',
         'yakonfig >= 0.6.0',
-        'gevent',
         'pyyaml',
         'redis',
         'psutil',
         'python-daemon<2',
         'setproctitle',
         'cbor',
-        # ], tests_require=[
-        'pexpect',
-        'pytest',
-        'ipdb',
-        'pytest-cov',
-        'pytest-xdist',
-        'pytest-timeout',
-        'pytest-incremental',
-        'pytest-capturelog',
-        'epydoc',
-        'pytest-diffeo',
     ],
+    extras_require={
+        'unittest': ['pytest', 'pytest-diffeo'],
+    },
     data_files=[
         ('rejester/examples', recursive_glob('src/examples', '*.*')),
     ],
@@ -134,7 +126,7 @@ setup(
         'console_scripts': [
             'rejester = rejester.run:main',
             'rejester_worker = rejester.run_multi_worker:main',
-            'rejester_test = rejester.tests.run:main',
+            'rejester_test = rejester.tests.run:main [unittest]',
         ],
     },
     zip_safe=False,  # so we can get into examples
