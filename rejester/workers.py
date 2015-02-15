@@ -891,6 +891,8 @@ class ForkWorker(Worker):
                 continue
             # So either someone else is doing its work or it's just overdue
             environment = self.task_master.get_heartbeat(child)
+            if not environment:
+                continue  # derp
             if 'pid' not in environment:
                 continue  # derp
             if environment['pid'] not in self.children:
