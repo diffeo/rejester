@@ -1,7 +1,7 @@
 '''External API for rejester task system.
 
 .. This software is released under an MIT/X11 open source license.
-   Copyright 2012-2014 Diffeo, Inc.
+   Copyright 2012-2015 Diffeo, Inc.
 
 '''
 from __future__ import absolute_import, division
@@ -249,7 +249,8 @@ class WorkUnit(object):
 
         '''
         if not worker_id:
-            raise ProgrammerError('must specify a worker_id, not: %r' % worker_id)
+            raise ProgrammerError('must specify a worker_id, not: %r' %
+                                  worker_id)
         #: Worker doing this work unit
         self.worker_id = worker_id
         #: Mid-level Redis interface
@@ -260,8 +261,9 @@ class WorkUnit(object):
         self.key = key
         #: Data provided for the work unit
         if not isinstance(data, dict):
-            raise Exception('WorkUnit must be given a dict() for data, otherwise '
-                            'exceptions will not get passed back up')
+            raise ProgrammerError('WorkUnit must be given a dict() for '
+                                  'data, otherwise exceptions will not '
+                                  'get passed back up')
         self.data = data
         #: Has this work unit called :meth:`finish`?
         self.finished = False
@@ -282,12 +284,14 @@ class WorkUnit(object):
     def spec(self):
         '''Actual work spec.
 
-        This is retrieved from the database on first use, and in some cases
-        a worker can be mildly more efficient if it avoids using this.
+        This is retrieved from the database on first use, and in some
+        cases a worker can be mildly more efficient if it avoids using
+        this.
 
         '''
         if self._spec_cache is None:
-            self._spec_cache = self.registry.get(WORK_SPECS, self.work_spec_name)
+            self._spec_cache = self.registry.get(
+                WORK_SPECS, self.work_spec_name)
         return self._spec_cache
 
     @property
@@ -302,12 +306,13 @@ class WorkUnit(object):
 
         '''
         if self._module_cache is None:
-            funclist = filter(None, (self.spec.get('run_function'), self.spec.get('terminate_function')))
+            funclist = filter(None, (self.spec.get('run_function'),
+                                     self.spec.get('terminate_function')))
             if funclist:
                 try:
                     self._module_cache = __import__(
                         self.spec['module'], globals(), (), funclist, -1)
-                except Exception, exc:
+                except Exception:
                     logger.error('failed to load spec["module"] = %r',
                                  self.spec['module'], exc_info=True)
                     raise
@@ -330,10 +335,10 @@ class WorkUnit(object):
             self.update()
             logger.info('completed work unit {}'.format(self.key))
             return ret_val
-        except LostLease, exc:
+        except LostLease:
             logger.warning('work unit {} timed out'.format(self.key))
             raise
-        except Exception, exc:
+        except Exception:
             logger.error('work unit {} failed'.format(self.key),
                          exc_info=True)
             raise
@@ -353,17 +358,87 @@ class WorkUnit(object):
         '''
         terminate_function_name = self.spec.get('terminate_function')
         if not terminate_function_name:
-            logger.error('tried to terminate WorkUnit(%r) but no function name', self.key)
+            logger.error('tried to terminate WorkUnit(%r) but no '
+                         'function name', self.key)
             return None
-        terminate_function = getattr(self.module, self.spec['terminate_function'])
+        terminate_function = getattr(self.module,
+                                     self.spec['terminate_function'])
         if not terminate_function:
-            logger.error('tried to terminate WorkUnit(%r) but no function %s in module %r', self.key, terminate_function_name, self.module.__name__)
+            logger.error('tried to terminate WorkUnit(%r) but no '
+                         'function %s in module %r',
+                         self.key, terminate_function_name,
+                         self.module.__name__)
             return None
         logger.info('calling terminate function for work unit {}'
                     .format(self.key))
         ret_val = terminate_function(self)
         self.update(lease_time=-10)
         return ret_val
+
+    def _refresh(self, session, stopping=False):
+        '''Get this task's current state.
+
+        This must be called under the registry's lock.  It updates
+        the :attr:`finished` and :attr:`failed` flags and the
+        :attr:`data` dictionary based on the current state in the
+        registry.
+
+        In the normal case, nothing will change and this function
+        will return normally.  If it turns out that the work unit
+        is already finished, the state of this object will change
+        before :exc:`rejester.exceptions.LostLease` is raised.
+
+        :param session: locked registry session
+        :param stopping: don't raise if the work unit is finished
+        :raises rejester.exceptions.LostLease: if this worker is
+          no longer doing this work unit
+
+        '''
+        data = session.get(
+            WORK_UNITS_ + self.work_spec_name + _FINISHED, self.key)
+        if data is not None:
+            self.finished = True
+            self.data = data
+            if not stopping:
+                raise LostLease('work unit is already finished')
+            return
+        self.finished = False
+
+        data = session.get(
+            WORK_UNITS_ + self.work_spec_name + _FAILED, self.key)
+        if data is not None:
+            self.failed = True
+            self.data = data
+            if not stopping:
+                raise LostLease('work unit has already failed')
+            return
+        self.failed = False
+
+        # (You need a pretty specific sequence of events to get here)
+        data = session.get(
+            WORK_UNITS_ + self.work_spec_name + _BLOCKED, self.key)
+        if data is not None:
+            self.data = data
+            raise LostLease('work unit now blocked by others')
+
+        worker_id = session.get(
+            WORK_UNITS_ + self.work_spec_name + '_locks', self.key)
+        if worker_id != self.worker_id:
+            raise LostLease('work unit claimed by %r', worker_id)
+
+        # NB: We could check the priority here, but don't.
+        # If at this point we're technically overtime but nobody
+        # else has started doing work yet, since we're under the
+        # global lock, we can get away with finishing whatever
+        # transition we were going to try to do.
+        data = session.get(
+            WORK_UNITS_ + self.work_spec_name, self.key)
+        if data is None:
+            raise NoSuchWorkUnitError('work unit is gone')
+        # Since we should still own the work unit, any changes
+        # in data should be on our end; do not touch it
+
+        return  # we've checked everything to check
 
     def update(self, lease_time=None):
         '''Refresh this task's expiration time.
@@ -378,19 +453,10 @@ class WorkUnit(object):
           expired
 
         '''
-        if self.finished:
-            raise ProgrammerError('cannot .update() after .finish()')
-        if self.failed:
-            raise ProgrammerError('cannot .update() after .fail()')
         if lease_time is None:
             lease_time = self.default_lifetime
         with self.registry.lock(identifier=self.worker_id) as session:
-            if self.finished:
-                logger.debug('WorkUnit(%r) became finished while waiting for lock to update', self.key)
-                return
-            if self.failed:
-                logger.debug('WorkUnit(%r) became failed while waiting for lock to update', self.key)
-                return
+            self._refresh(session)
             try:
                 self.expires = time.time() + lease_time
                 session.update(
@@ -406,29 +472,35 @@ class WorkUnit(object):
         '''Move this work unit to a finished state.
 
         In the standard worker system, the worker calls this on the job's
-        behalf when :meth:`run_function` returns successfully.  Does nothing
-        if the work unit is already complete.
+        behalf when :meth:`run_function` returns successfully.
+
+        :raises rejester.exceptions.LostLease: if the lease has already
+          expired
 
         '''
-        if self.finished or self.failed:
-            return
         with self.registry.lock(identifier=self.worker_id) as session:
+            self._refresh(session, stopping=True)
             if self.finished or self.failed:
                 return
-            logger.debug('WorkUnit finish %r', self.key)
             session.move(
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FINISHED,
                 {self.key: self.data})
-            blocks = session.get(WORK_UNITS_ + self.work_spec_name + _BLOCKS,
-                                 self.key)
+            session.popmany(
+                WORK_UNITS_ + self.work_spec_name + '_locks',
+                self.key, self.worker_id)
+            blocks = session.get(
+                WORK_UNITS_ + self.work_spec_name + _BLOCKS,
+                self.key)
             if blocks is not None:
                 for block in blocks:
                     spec = block[0]
                     unit = block[1]
-                    hard = block[2]
-                    depends = session.get(WORK_UNITS_ + spec + _DEPENDS, unit)
-                    if depends is None: continue
+                    # hard = block[2]
+                    depends = session.get(WORK_UNITS_ + spec + _DEPENDS,
+                                          unit)
+                    if depends is None:
+                        continue
                     depends.remove([self.work_spec_name, self.key])
                     if len(depends) == 0:
                         session.popmany(WORK_UNITS_ + spec + _DEPENDS, unit)
@@ -436,11 +508,11 @@ class WorkUnit(object):
                                               unit)
                         session.move(WORK_UNITS_ + spec + _BLOCKED,
                                      WORK_UNITS_ + spec,
-                                     { unit: unitdef })
+                                     {unit: unitdef})
                     else:
                         session.set(WORK_UNITS_ + spec + _DEPENDS, unit,
                                     depends)
-        self.finished = True
+            self.finished = True
 
     def fail(self, exc=None):
         '''Move this work unit to a failed state.
@@ -457,23 +529,28 @@ class WorkUnit(object):
                 work_unit.fail(e)
 
         A ``traceback`` property is recorded with a formatted version
-        of `exc`, if any.  Does nothing if the work unit is already
-        complete.
+        of `exc`, if any.
 
         :param exc: Exception that caused the failure, or :const:`None`
+        :raises rejester.exceptions.LostLease: if the lease has already
+          expired
 
         '''
-        if self.failed or self.finished:
-            return
-        self.data['traceback'] = exc and traceback.format_exc(exc) or exc
-        #self.data['worker_state'] = self.worker_state
         with self.registry.lock(identifier=self.worker_id) as session:
+            self._refresh(session, stopping=True)
             if self.finished or self.failed:
                 return
+            if exc:
+                self.data['traceback'] = traceback.format_exc(exc)
+            else:
+                self.data['traceback'] = None
             session.move(
                 WORK_UNITS_ + self.work_spec_name,
                 WORK_UNITS_ + self.work_spec_name + _FAILED,
                 {self.key: self.data})
+            session.popmany(
+                WORK_UNITS_ + self.work_spec_name + '_locks',
+                self.key, self.worker_id)
             blocks = session.get(WORK_UNITS_ + self.work_spec_name + _BLOCKS,
                                  self.key)
             if blocks is not None:
@@ -488,10 +565,12 @@ class WorkUnit(object):
                         if unitdef is not None:
                             session.move(WORK_UNITS_ + spec + _BLOCKED,
                                          WORK_UNITS_ + spec + _FAILED,
-                                         { unit: unitdef })
+                                         {unit: unitdef})
                     else:
-                        depends = session.get(WORK_UNITS_ + spec + _DEPENDS, unit)
-                        if depends is None: continue
+                        depends = session.get(WORK_UNITS_ + spec + _DEPENDS,
+                                              unit)
+                        if depends is None:
+                            continue
                         depends.remove([self.work_spec_name, self.key])
                         if len(depends) == 0:
                             session.popmany(WORK_UNITS_ + spec + _DEPENDS, unit)
@@ -500,7 +579,7 @@ class WorkUnit(object):
                             if unitdef is not None:
                                 session.move(WORK_UNITS_ + spec + _BLOCKED,
                                              WORK_UNITS_ + spec,
-                                             { unit: unitdef })
+                                             {unit: unitdef})
                         else:
                             session.set(WORK_UNITS_ + spec + _DEPENDS, unit,
                                         depends)
@@ -1637,11 +1716,13 @@ class TaskMaster(object):
                     (data, expires) = session.get(
                         WORK_UNITS_ + work_spec_name, work_unit_key,
                         include_priority=True)
-                    if data is None: data = {}
-                    result[child] = WorkUnit(
-                        self.registry, work_spec_name, work_unit_key,
-                        data, expires=expires, worker_id=assigned)
-
+                    if data is None:
+                        # The work unit is probably already finished
+                        result[child] = None
+                    else:
+                        result[child] = WorkUnit(
+                            self.registry, work_spec_name, work_unit_key,
+                            data, expires=expires, worker_id=assigned)
                 else:
                     # The child isn't doing anything.  Does it still
                     # exist?

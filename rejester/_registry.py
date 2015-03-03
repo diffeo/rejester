@@ -921,9 +921,12 @@ class Registry(RedisBase):
         key = self._encode(key)
         conn = redis.Redis(connection_pool=self.pool)
         val = conn.hget(dict_name, key)
-        _val = val and self._decode(val) or default
+        if val is None:
+            _val = default
+        else:
+            _val = self._decode(val)
         if include_priority:
-            if val:
+            if val is not None:
                 priority = conn.zscore(dict_name + 'keys', key)
                 return _val, priority
             else:
