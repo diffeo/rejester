@@ -1,11 +1,7 @@
 #!/usr/bin/env python
 
 import os
-import sys
-import fnmatch
-import subprocess
 
-from distutils.core import Command
 from setuptools import setup, find_packages
 
 from version import get_git_version
@@ -20,72 +16,9 @@ URL = 'http://github.com/diffeo/rejester'
 
 
 def read_file(file_name):
-    file_path = os.path.join(
-        os.path.dirname(__file__),
-        file_name
-    )
-    return open(file_path).read()
+    with open(os.path.join(os.path.dirname(__file__), file_name), 'r') as f:
+        return f.read()
 
-
-def recursive_glob(treeroot, pattern):
-    results = []
-    for base, dirs, files in os.walk(treeroot):
-        goodfiles = fnmatch.filter(files, pattern)
-        results.extend(os.path.join(base, f) for f in goodfiles)
-    return results
-
-
-class InstallTestDependencies(Command):
-    '''install test dependencies'''
-
-    description = 'installs all dependencies required to run all tests'
-
-    user_options = []
-
-    def initialize_options(self):
-        pass
-
-    def finalize_options(self):
-        pass
-
-    def easy_install(self, packages):
-        cmd = ['easy_install']
-        if packages:
-            cmd.extend(packages)
-            errno = subprocess.call(cmd)
-            if errno:
-                raise SystemExit(errno)
-
-    def run(self):
-        if self.distribution.install_requires:
-            self.easy_install(self.distribution.install_requires)
-        if self.distribution.tests_require:
-            self.easy_install(self.distribution.tests_require)
-
-
-class PyTest(Command):
-    '''run py.test'''
-
-    description = 'runs py.test to execute all tests'
-
-    user_options = []
-
-    def initialize_options(self):
-        pass
-
-    def finalize_options(self):
-        pass
-
-    def run(self):
-        if self.distribution.install_requires:
-            self.distribution.fetch_build_eggs(
-                self.distribution.install_requires)
-        if self.distribution.tests_require:
-            self.distribution.fetch_build_eggs(
-                self.distribution.tests_require)
-
-        errno = subprocess.call([sys.executable, 'runtests.py'])
-        raise SystemExit(errno)
 
 setup(
     name=PROJECT,
@@ -97,14 +30,20 @@ setup(
     author_email=AUTHOR_EMAIL,
     url=URL,
     packages=find_packages(),
-    cmdclass={'test': PyTest,
-              'install_test': InstallTestDependencies},
-    # We can select proper classifiers later
     classifiers=[
         'Development Status :: 3 - Alpha',
+        'Environment :: Console',
+        'Environment :: No Input/Output (Daemon)',
+        'Intended Audience :: Developers',
         'Topic :: Utilities',
         # MIT/X11 license http://opensource.org/licenses/MIT
         'License :: OSI Approved :: MIT License',
+        'Operating System :: POSIX',
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 2',
+        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 2 :: Only',
+        'Topic :: System :: Distributed Computing',
     ],
     install_requires=[
         'dblogger >= 0.4.0',
@@ -119,9 +58,6 @@ setup(
     extras_require={
         'unittest': ['pytest', 'pytest-diffeo'],
     },
-    data_files=[
-        ('rejester/examples', recursive_glob('src/examples', '*.*')),
-    ],
     entry_points={
         'console_scripts': [
             'rejester = rejester.run:main',
