@@ -52,7 +52,7 @@ WORK_UNIT_STATUS_BY_NAME = {
 }
 
 WORK_UNIT_STATUS_NAMES_BY_NUMBER = {
-    v:k for k,v in WORK_UNIT_STATUS_BY_NAME.iteritems()
+    v: k for k, v in WORK_UNIT_STATUS_BY_NAME.iteritems()
 }
 
 
@@ -822,13 +822,14 @@ class TaskMaster(object):
             for work_spec_name in self.registry.pull(NICE_LEVELS).iterkeys():
                 def scan(sfx):
                     v = self.registry.pull(WORK_UNITS_ + work_spec_name + sfx)
-                    if v is None: return []
+                    if v is None:
+                        return []
                     return v.keys()
                 for key in scan(''):
                     logger.debug('spec {} unit {} available or pending'
                                  .format(work_spec_name, key))
                 for key in scan(_BLOCKED):
-                    blocked_on = self.registry.get(
+                    blocked_on = session.get(
                         WORK_UNITS_ + work_spec_name + _DEPENDS, key)
                     logger.debug('spec {} unit {} blocked on {!r}'
                                  .format(work_spec_name, key, blocked_on))
@@ -838,7 +839,6 @@ class TaskMaster(object):
                 for key in scan(_FAILED):
                     logger.debug('spec {} unit {} failed'
                                  .format(work_spec_name, key))
-
 
     @classmethod
     def validate_work_spec(cls, work_spec):
@@ -852,7 +852,7 @@ class TaskMaster(object):
         if 'name' not in work_spec:
             raise ProgrammerError('work_spec lacks "name"')
         if 'min_gb' not in work_spec or \
-                not isinstance(work_spec['min_gb'], (float, int)):
+                not isinstance(work_spec['min_gb'], (float, int, long)):
             raise ProgrammerError('work_spec["min_gb"] must be a number')
 
     def num_available(self, work_spec_name):
@@ -863,7 +863,7 @@ class TaskMaster(object):
         on some other work unit.
 
         '''
-        return self.registry.len(WORK_UNITS_ + work_spec_name, 
+        return self.registry.len(WORK_UNITS_ + work_spec_name,
                                  priority_max=time.time())
 
     def num_pending(self, work_spec_name):
@@ -874,7 +874,7 @@ class TaskMaster(object):
         died and that have not yet expired).
 
         '''
-        return self.registry.len(WORK_UNITS_ + work_spec_name, 
+        return self.registry.len(WORK_UNITS_ + work_spec_name,
                                  priority_min=time.time())
 
     def num_blocked(self, work_spec_name):

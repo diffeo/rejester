@@ -210,6 +210,23 @@ def test_task_master_lost_lease(task_master, monkeypatch):
         work_unit1.update()
 
 
+def test_task_master_regenerate(task_master):
+    '''test that getting work lets us resubmit the work spec'''
+    task_master.update_bundle(work_spec, {'one': {'number': 1}})
+
+    work_unit1 = task_master.get_work('fake_worker_id1', available_gb=13)
+    assert work_unit1.key == 'one'
+    task_master.update_bundle(work_unit1.spec, {'two': {'number': 2}})
+    work_unit1.finish()
+
+    work_unit2 = task_master.get_work('fake_worker_id1', available_gb=13)
+    assert work_unit2.key == 'two'
+    work_unit2.finish()
+
+    work_unit3 = task_master.get_work('fake_worker_id1', available_gb=13)
+    assert work_unit3 is None
+
+
 def test_worker_child(task_master):
     '''test the basic parent/child worker interface'''
     task_master.worker_register('child', mode=task_master.get_mode(),
