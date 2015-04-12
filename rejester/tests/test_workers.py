@@ -62,9 +62,10 @@ work_spec = dict(
 
 @pytest.mark.slow  # noqa
 def test_single_worker(task_master):
-    work_units = {'key{}'.format(x): {'config': task_master.registry.config,
-                                      'sleep': 1}
-                  for x in xrange(2)}
+    work_units = dict([('key{0}'.format(x),
+                        {'config': task_master.registry.config,
+                         'sleep': 1})
+                       for x in xrange(2)])
     task_master.update_bundle(work_spec, work_units)
     assert task_master.num_finished(work_spec['name']) == 0
     assert task_master.num_available(work_spec['name']) == 2
@@ -239,9 +240,9 @@ def test_do_work(task_master, tmpdir):
     num_units = 10
     num_units_cursor = 0
     c = dict(task_master.registry.config)
-    work_units = {'key' + str(x): {'config': c, 'sleep': 2}
-                  for x in xrange(num_units_cursor,
-                                  num_units_cursor + num_units)}
+    work_units = dict([('key' + str(x), {'config': c, 'sleep': 2})
+                       for x in xrange(num_units_cursor,
+                                       num_units_cursor + num_units)])
     num_units_cursor += num_units
     task_master.update_bundle(work_spec, work_units)
     task_master.set_mode(task_master.RUN)
@@ -261,9 +262,9 @@ def test_failed_work(task_master, tmpdir):
     num_units = 10
     num_units_cursor = 0
     c = dict(task_master.registry.config)
-    work_units = {'key' + str(x): {'config': c, 'sleep': 2}
-                  for x in xrange(num_units_cursor,
-                                  num_units_cursor + num_units)}
+    work_units = dict([('key' + str(x), {'config': c, 'sleep': 2})
+                       for x in xrange(num_units_cursor,
+                                       num_units_cursor + num_units)])
     num_units_cursor += num_units
     task_master.update_bundle(work_spec_broken, work_units)
     task_master.set_mode(task_master.RUN)
@@ -280,9 +281,9 @@ def test_add_more_work(task_master, tmpdir):
     num_units = 10
     num_units_cursor = 0
     c = dict(task_master.registry.config)
-    work_units = {'key' + str(x): {'config': c, 'sleep': 2}
-                  for x in xrange(num_units_cursor,
-                                  num_units_cursor + num_units)}
+    work_units = dict([('key' + str(x), {'config': c, 'sleep': 2})
+                       for x in xrange(num_units_cursor,
+                                       num_units_cursor + num_units)])
     num_units_cursor += num_units
     task_master.update_bundle(work_spec, work_units)
     task_master.set_mode(task_master.RUN)
@@ -290,9 +291,9 @@ def test_add_more_work(task_master, tmpdir):
     with run_worker(c, tmpdir):
         assert_completion(task_master, work_spec)
 
-        work_units = {'key' + str(x): {'config': c, 'sleep': 2}
-                      for x in xrange(num_units_cursor,
-                                      num_units_cursor + num_units)}
+        work_units = dict([('key' + str(x), {'config': c, 'sleep': 2})
+                           for x in xrange(num_units_cursor,
+                                           num_units_cursor + num_units)])
         num_units_cursor += num_units
         task_master.update_bundle(work_spec, work_units)
 
@@ -307,9 +308,9 @@ def test_add_work_midway(task_master, tmpdir):
     num_units = 10
     num_units_cursor = 0
     c = dict(task_master.registry.config)
-    work_units = {'key' + str(x): {'config': c, 'sleep': 2}
-                  for x in xrange(num_units_cursor,
-                                  num_units_cursor + num_units)}
+    work_units = dict([('key' + str(x), {'config': c, 'sleep': 2})
+                       for x in xrange(num_units_cursor,
+                                       num_units_cursor + num_units)])
     num_units_cursor += num_units
     task_master.update_bundle(work_spec, work_units)
     task_master.set_mode(task_master.RUN)
@@ -317,9 +318,9 @@ def test_add_work_midway(task_master, tmpdir):
     with run_worker(c, tmpdir):
         assert_started(task_master, work_spec)
 
-        work_units = {'key' + str(x): {'config': c, 'sleep': 2}
-                      for x in xrange(num_units_cursor,
-                                      num_units_cursor + num_units)}
+        work_units = dict([('key' + str(x), {'config': c, 'sleep': 2})
+                           for x in xrange(num_units_cursor,
+                                           num_units_cursor + num_units)])
         num_units_cursor += num_units
         task_master.update_bundle(work_spec, work_units)
 

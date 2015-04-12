@@ -42,14 +42,14 @@ def check_config(config, name):
     for k in ['registry_addresses', 'app_name', 'namespace']:
         if k not in config or config[k] is None:
             raise yakonfig.ConfigurationError(
-                '{} requires configuration for {}'
+                '{0} requires configuration for {1}'
                 .format(name, k))
     if len(config['registry_addresses']) == 0:
         raise yakonfig.ConfigurationError(
-            '{} requires at least one registry_addresses'
+            '{0} requires at least one registry_addresses'
             .format(name))
     for addr in config['registry_addresses']:
         if ':' not in addr:
             raise yakonfig.ConfigurationError(
-                '{} registry_addresses must be HOST:PORT, not {!r}'
+                '{0} registry_addresses must be HOST:PORT, not {1!r}'
                 .format(name, addr))

@@ -198,7 +198,7 @@ logger = logging.getLogger(__name__)
 def existing_path(string):
     '''"Convert" a string to a string that is a path to an existing file.'''
     if not os.path.exists(string):
-        msg = 'path {!r} does not exist'.format(string)
+        msg = 'path {0!r} does not exist'.format(string)
         raise argparse.ArgumentTypeError(msg)
     return string
 
@@ -210,10 +210,10 @@ def existing_path_or_minus(string):
 def absolute_path(string):
     '''"Convert" a string to a string that is an absolute existing path.'''
     if not os.path.isabs(string):
-        msg = '{!r} is not an absolute path'.format(string)
+        msg = '{0!r} is not an absolute path'.format(string)
         raise argparse.ArgumentTypeError(msg)
     if not os.path.exists(os.path.dirname(string)):
-        msg = 'path {!r} does not exist'.format(string)
+        msg = 'path {0!r} does not exist'.format(string)
         raise argparse.ArgumentTypeError(msg)
     return string
 
@@ -339,14 +339,14 @@ class Manager(ArgParseCmd):
             work_units_fh = self._work_units_fh_from_path(args.work_units_path)
             if work_units_fh is None:
                 raise RuntimeError('need -u/--work-units or --no-work')
-        self.stdout.write('loading work units from {!r}\n'
+        self.stdout.write('loading work units from {0!r}\n'
                           .format(work_units_fh))
-        work_units = {k:v for k,v in self._read_work_units_file(work_units_fh)}
+        work_units = dict(self._read_work_units_file(work_units_fh))
 
         if work_units:
             self.stdout.write('pushing work units\n')
             self.task_master.add_work_units(work_spec['name'], work_units.items())
-            self.stdout.write('finished writing {} work units to work_spec={!r}\n'
+            self.stdout.write('finished writing {0} work units to work_spec={1!r}\n'
                               .format(len(work_units), work_spec['name']))
         else:
             self.stdout.write('no work units. done.\n')
@@ -376,12 +376,12 @@ class Manager(ArgParseCmd):
         '''delete the entire contents of the current namespace'''
         namespace = self.config['namespace']
         if not args.assume_yes:
-            response = raw_input('Delete everything in {!r}?  Enter namespace: '
+            response = raw_input('Delete everything in {0!r}?  Enter namespace: '
                                  .format(namespace))
             if response != namespace:
                 self.stdout.write('not deleting anything\n')
                 return
-        self.stdout.write('deleting namespace {!r}\n'.format(namespace))
+        self.stdout.write('deleting namespace {0!r}\n'.format(namespace))
         self.task_master.registry.delete_namespace()
 
     def args_work_specs(self, parser):
@@ -391,7 +391,7 @@ class Manager(ArgParseCmd):
         work_spec_names = [x['name'] for x in self.task_master.iter_work_specs()]
         work_spec_names.sort()
         for name in work_spec_names:
-            self.stdout.write('{}\n'.format(name))
+            self.stdout.write('{0}\n'.format(name))
 
     def args_work_spec(self, parser):
         self._add_work_spec_name_args(parser)
@@ -453,7 +453,7 @@ class Manager(ArgParseCmd):
             status = args.status.upper()
             statusi = getattr(self.task_master, status, None)
             if statusi is None:
-                self.stdout.write('unknown status {!r}\n'.format(args.status))
+                self.stdout.write('unknown status {0!r}\n'.format(args.status))
                 return
         else:
             statusi = None
@@ -469,11 +469,11 @@ class Manager(ArgParseCmd):
                     tback += '\n'
                     work_units[k]['traceback'] = 'displayed below'
                 self.stdout.write(
-                    '{!r}: {}\n{}'
+                    '{0!r}: {1}\n{2}'
                     .format(k, pprint.pformat(work_units[k], indent=4),
                             tback))
             else:
-                self.stdout.write('{}\n'.format(k))
+                self.stdout.write('{0}\n'.format(k))
 
     def args_failed(self, parser):
         self._add_work_spec_name_args(parser)
@@ -498,7 +498,7 @@ class Manager(ArgParseCmd):
         for work_unit_name in args.unit:
             status = self.task_master.get_work_unit_status(work_spec_name,
                                                            work_unit_name)
-            self.stdout.write('{} ({!r})\n'
+            self.stdout.write('{0} ({1!r})\n'
                               .format(work_unit_name, status['status']))
             if 'expiration' in status:
                 when = time.ctime(status['expiration'])
@@ -506,10 +506,10 @@ class Manager(ArgParseCmd):
                     if status['expiration'] == 0:
                         self.stdout.write('  Never scheduled\n')
                     else:
-                        self.stdout.write('  Available since: {}\n'
+                        self.stdout.write('  Available since: {0}\n'
                                           .format(when))
                 else:
-                    self.stdout.write('  Expires: {}\n'.format(when))
+                    self.stdout.write('  Expires: {0}\n'.format(when))
             if 'worker_id' in status:
                 try:
                     heartbeat = self.task_master.get_heartbeat(status['worker_id'])
@@ -521,20 +521,20 @@ class Manager(ArgParseCmd):
                                 '')
                     ipaddrs = ', '.join(heartbeat.get('ipaddrs', ()))
                     if hostname and ipaddrs:
-                        summary = '{} on {}'.format(hostname, ipaddrs)
+                        summary = '{0} on {1}'.format(hostname, ipaddrs)
                     else:
                         summary = hostname + ipaddrs
                 else:
                     summary = 'No information'
-                self.stdout.write('  Worker: {} ({})\n'.format(
+                self.stdout.write('  Worker: {0} ({1})\n'.format(
                     status['worker_id'], summary))
             if 'traceback' in status:
-                self.stdout.write('  Traceback:\n{}\n'.format(
+                self.stdout.write('  Traceback:\n{0}\n'.format(
                     status['traceback']))
             if 'depends_on' in status:
                 self.stdout.write('  Depends on:\n')
                 for what in status['depends_on']:
-                    self.stdout.write('    {!r}\n'.format(what))
+                    self.stdout.write('    {0!r}\n'.format(what))
 
     def args_retry(self, parser):
         self._add_work_spec_name_args(parser)
@@ -571,22 +571,22 @@ class Manager(ArgParseCmd):
                     retried += len(units)
                 except NoSuchWorkUnitError, e:
                     unit = e.work_unit_name
-                    self.stdout.write('No such failed work unit {!r}.\n'
+                    self.stdout.write('No such failed work unit {0!r}.\n'
                                       .format(unit))
                     complained = True
                     units.remove(unit)
                     # and try again
         except NoSuchWorkSpecError, e:
             # NB: you are not guaranteed to get this, especially with --all
-            self.stdout.write('Invalid work spec {!r}.\n'
+            self.stdout.write('Invalid work spec {0!r}.\n'
                               .format(work_spec_name))
             return
         if retried == 0 and not complained:
             self.stdout.write('Nothing to do.\n')
         elif retried == 1:
-            self.stdout.write('Retried {} work unit.\n'.format(retried))
+            self.stdout.write('Retried {0} work unit.\n'.format(retried))
         elif retried > 1:
-            self.stdout.write('Retried {} work units.\n'.format(retried))
+            self.stdout.write('Retried {0} work units.\n'.format(retried))
 
     def args_clear(self, parser):
         self._add_work_spec_name_args(parser)
@@ -621,7 +621,7 @@ class Manager(ArgParseCmd):
         elif args.status == 'failed':
             count += self.task_master.del_work_units(
                 work_spec_name, work_unit_keys=units, state=self.task_master.FAILED)
-        self.stdout.write('Removed {} work units.\n'.format(count))
+        self.stdout.write('Removed {0} work units.\n'.format(count))
 
     def args_mode(self, parser):
         parser.add_argument('mode', choices=['idle', 'run', 'terminate'],
@@ -634,10 +634,10 @@ class Manager(ArgParseCmd):
                      'run': self.task_master.RUN,
                      'terminate': self.task_master.TERMINATE }[args.mode]
             self.task_master.set_mode(mode)
-            self.stdout.write('set mode to {!r}\n'.format(args.mode))
+            self.stdout.write('set mode to {0!r}\n'.format(args.mode))
         else:
             mode = self.task_master.get_mode()
-            self.stdout.write('{!s}\n'.format(mode))
+            self.stdout.write('{0!s}\n'.format(mode))
 
     def args_global_lock(self, parser):
         parser.add_argument('--purge', '-p', action='store_true',
@@ -651,10 +651,10 @@ class Manager(ArgParseCmd):
             if owner:
                 heartbeat = self.task_master.get_heartbeat(owner)
                 if 'hostname' in heartbeat:
-                    self.stdout.write('{} ({})\n'.format(owner,
+                    self.stdout.write('{0} ({1})\n'.format(owner,
                                                          heartbeat['hostname']))
                 else:
-                    self.stdout.write('{}\n'.format(owner))
+                    self.stdout.write('{0}\n'.format(owner))
             else:
                 self.stdout.write('(unlocked)\n')
 
@@ -667,11 +667,11 @@ class Manager(ArgParseCmd):
         '''list all known workers'''
         workers = self.task_master.workers(alive=not args.all)
         for k in sorted(workers.iterkeys()):
-            self.stdout.write('{} ({})\n'.format(k, workers[k]))
+            self.stdout.write('{0} ({1})\n'.format(k, workers[k]))
             if args.details:
                 heartbeat = self.task_master.get_heartbeat(k)
                 for hk, hv in heartbeat.iteritems():
-                    self.stdout.write('  {}: {}\n'.format(hk, hv))
+                    self.stdout.write('  {0}: {1}\n'.format(hk, hv))
 
     def args_run_one(self, parser):
         parser.add_argument('--from-work-spec', action='append', default=[], help='workspec name to accept work from, may be repeated.')

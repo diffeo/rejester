@@ -790,9 +790,9 @@ class Registry(RedisBase):
         dict_name = self._namespace(dict_name)
         conn = redis.Redis(connection_pool=self.pool)
         res = conn.hgetall(dict_name)
-        split_res = {self._decode(key):
-                     self._decode(value)
-                     for key, value in res.iteritems()}
+        split_res = dict([(self._decode(key),
+                           self._decode(value))
+                          for key, value in res.iteritems()])
         return split_res
 
     def filter(self, dict_name, priority_min='-inf', priority_max='+inf',
@@ -859,9 +859,9 @@ class Registry(RedisBase):
                            priority_min, priority_max, start, limit])
         if res == -1:
             raise LockError()
-        split_res = {self._decode(res[i]):
-                     self._decode(res[i+1])
-                     for i in xrange(0, len(res)-1, 2)}
+        split_res = dict([(self._decode(res[i]),
+                           self._decode(res[i+1]))
+                          for i in xrange(0, len(res)-1, 2)])
         return split_res
 
     def set_1to1(self, dict_name, key1, key2):

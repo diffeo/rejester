@@ -51,9 +51,9 @@ WORK_UNIT_STATUS_BY_NAME = {
     'FAILED': FAILED,
 }
 
-WORK_UNIT_STATUS_NAMES_BY_NUMBER = {
-    v: k for k, v in WORK_UNIT_STATUS_BY_NAME.iteritems()
-}
+WORK_UNIT_STATUS_NAMES_BY_NUMBER = dict([
+    (v, k) for k, v in WORK_UNIT_STATUS_BY_NAME.iteritems()
+])
 
 
 def build_task_master(config):
@@ -329,17 +329,17 @@ class WorkUnit(object):
 
         '''
         try:
-            logger.info('running work unit {}'.format(self.key))
+            logger.info('running work unit {0}'.format(self.key))
             run_function = getattr(self.module, self.spec['run_function'])
             ret_val = run_function(self)
             self.update()
-            logger.info('completed work unit {}'.format(self.key))
+            logger.info('completed work unit {0}'.format(self.key))
             return ret_val
         except LostLease:
-            logger.warning('work unit {} timed out'.format(self.key))
+            logger.warning('work unit {0} timed out'.format(self.key))
             raise
         except Exception:
-            logger.error('work unit {} failed'.format(self.key),
+            logger.error('work unit {0} failed'.format(self.key),
                          exc_info=True)
             raise
 
@@ -369,7 +369,7 @@ class WorkUnit(object):
                          self.key, terminate_function_name,
                          self.module.__name__)
             return None
-        logger.info('calling terminate function for work unit {}'
+        logger.info('calling terminate function for work unit {0}'
                     .format(self.key))
         ret_val = terminate_function(self)
         self.update(lease_time=-10)
@@ -826,18 +826,18 @@ class TaskMaster(object):
                         return []
                     return v.keys()
                 for key in scan(''):
-                    logger.debug('spec {} unit {} available or pending'
+                    logger.debug('spec {0} unit {1} available or pending'
                                  .format(work_spec_name, key))
                 for key in scan(_BLOCKED):
                     blocked_on = session.get(
                         WORK_UNITS_ + work_spec_name + _DEPENDS, key)
-                    logger.debug('spec {} unit {} blocked on {!r}'
+                    logger.debug('spec {0} unit {1} blocked on {2!r}'
                                  .format(work_spec_name, key, blocked_on))
                 for key in scan(_FINISHED):
-                    logger.debug('spec {} unit {} finished'
+                    logger.debug('spec {0} unit {1} finished'
                                  .format(work_spec_name, key))
                 for key in scan(_FAILED):
-                    logger.debug('spec {} unit {} failed'
+                    logger.debug('spec {0} unit {1} failed'
                                  .format(work_spec_name, key))
 
     @classmethod
@@ -983,7 +983,7 @@ class TaskMaster(object):
                 return self.list_finished_work_units(work_spec_name, start=start, limit=limit).items()
             if state == FAILED:
                 return self.list_failed_work_units(work_spec_name, start=start, limit=limit).items()
-            raise ProgrammerError("unknown state {!r}".format(state))
+            raise ProgrammerError("unknown state {0!r}".format(state))
         return self.list_work_units(work_spec_name, start=start, limit=limit)
 
     def list_work_units(self, work_spec_name, start=0, limit=None):

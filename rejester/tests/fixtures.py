@@ -63,7 +63,11 @@ def _then_delete_namespace(request, obj, registry=None):
         # statement; but when we get here, under the py.test
         # capturelog plugin, the root logger has already been
         # removed.
-        handler = logging.NullHandler()
+        class NullHandler(logging.Handler):
+            # for python2.6 support
+            def emit(self, record):
+                pass
+        handler = NullHandler()
         root_logger = logging.getLogger()
         root_logger.addHandler(handler)
         registry.delete_namespace()

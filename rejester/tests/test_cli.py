@@ -14,6 +14,10 @@ import subprocess
 import sys
 import time
 import uuid
+try:
+    import regex as re
+except:
+    import re
 
 import pytest
 import yaml
@@ -85,10 +89,10 @@ def work_spec():
 @pytest.fixture
 def work_units(global_config):
     num_units = 11
-    return {
-        'key-{}'.format(x): {'sleep': 0.2, 'config': global_config}
+    return dict([
+        ('key-{0}'.format(x), {'sleep': 0.2, 'config': global_config})
         for x in xrange(num_units)
-    }
+    ])
 
 
 @pytest.fixture
@@ -325,9 +329,13 @@ def test_work_units_details_more(manager, work_spec):
     v = manager.stdout.getvalue()
     assert v.startswith("'k': {")
     assert v.endswith("}\n")
-    assert "'list': [1L, 2L, 3L]" in v
-    assert "'tuple': (4L, 5L, 6L)" in v
-    assert "'mixed': [1L, (2L, [3L, 4L])]" in v
+    def versionize(s):
+        if sys.version_info >= (2, 7):
+            s = re.sub('(?P<number>\d+)', '\g<number>L', s)
+        return s
+    assert versionize("'list': [1, 2, 3]") in v
+    assert versionize("'tuple': (4, 5, 6)") in v
+    assert versionize("'mixed': [1, (2, [3, 4])]") in v
     assert "'uuid': UUID('01234567-89ab-cdef-0123-456789abcdef')" in v
     assert "'str': 'foo'" in v
     assert "'unicode': u'foo'" in v
@@ -439,7 +447,7 @@ def test_clear_simple(manager, loaded, work_spec, work_units):
     manager.runcmd('clear', ['-W', work_spec['name']])
     assert manager.task_master.num_available(work_spec['name']) == 0
     assert (manager.stdout.getvalue() ==
-            'Removed {} work units.\n'.format(len(work_units)))
+            'Removed {0} work units.\n'.format(len(work_units)))
 
 
 def test_clear_available(manager, loaded, work_spec, work_units):
@@ -448,7 +456,7 @@ def test_clear_available(manager, loaded, work_spec, work_units):
     manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'available'])
     assert manager.task_master.num_available(work_spec['name']) == 0
     assert (manager.stdout.getvalue() ==
-            'Removed {} work units.\n'.format(len(work_units)))
+            'Removed {0} work units.\n'.format(len(work_units)))
 
 
 def test_clear_pending(manager, loaded, work_spec, work_units):
@@ -556,7 +564,7 @@ def test_clear_finished_by_name(manager, loaded, work_spec, work_units):
 def test_clean_with_work(manager, worked, work_spec, work_units):
     manager.runcmd('clear', ['-W', work_spec['name']])
     assert (manager.stdout.getvalue() ==
-            'Removed {} work units.\n'.format(len(work_units)))
+            'Removed {0} work units.\n'.format(len(work_units)))
     assert manager.task_master.status(work_spec['name']) == {
         'num_available': 0,
         'num_pending': 0,
@@ -570,7 +578,7 @@ def test_clean_with_work(manager, worked, work_spec, work_units):
 def test_clean_available_with_work(manager, worked, work_spec, work_units):
     manager.runcmd('clear', ['-W', work_spec['name'], '-s', 'available'])
     assert (manager.stdout.getvalue() ==
-            'Removed {} work units.\n'.format(len(work_units) - 6))
+            'Removed {0} work units.\n'.format(len(work_units) - 6))
     assert manager.task_master.status(work_spec['name']) == {
         'num_available': 0,
         'num_pending': 1,

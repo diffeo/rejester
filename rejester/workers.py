@@ -97,7 +97,7 @@ def run_worker(worker_class, *args, **kwargs):
     try:
         worker = worker_class(*args, **kwargs)
     except Exception:
-        logger.critical('failed to create worker {!r}'.format(worker_class),
+        logger.critical('failed to create worker {0!r}'.format(worker_class),
                         exc_info=True)
         raise
     # A note on style here:
@@ -114,7 +114,7 @@ def run_worker(worker_class, *args, **kwargs):
         worker.run()
         worker.unregister()
     except Exception:
-        logger.error('worker {!r} died'.format(worker_class), exc_info=True)
+        logger.error('worker {0!r} died'.format(worker_class), exc_info=True)
         try:
             worker.unregister()
         except:
@@ -317,7 +317,7 @@ class MultiWorker(Worker):
         while True:
             mode = self.heartbeat()
             if mode != self._mode:
-                logger.info('worker {} changed to mode {}'
+                logger.info('worker {0} changed to mode {1}'
                             .format(self.worker_id, mode))
                 self._mode = mode
             now = time.time()
@@ -391,7 +391,7 @@ class SingleWorker(Worker):
             return False
         try:
             if set_title:
-                setproctitle('rejester worker {!r} {!r}'
+                setproctitle('rejester worker {0!r} {1!r}'
                              .format(unit.work_spec_name, unit.key))
             unit.run()
             unit.finish()
@@ -740,7 +740,7 @@ class ForkWorker(Worker):
             sys.exit(0)
         else:
             # We are the parent
-            self.debug('children', 'new log child with pid {}'.format(pid))
+            self.debug('children', 'new log child with pid {0}'.format(pid))
             self.log_child = pid
             os.close(read_end)
             self.log_fd = write_end
@@ -752,7 +752,7 @@ class ForkWorker(Worker):
             self.log_fd = None
         if self.log_child:
             try:
-                self.debug('children', 'stopping log child with pid {}'
+                self.debug('children', 'stopping log child with pid {0}'
                            .format(self.log_child))
                 os.kill(self.log_child, signal.SIGTERM)
                 os.waitpid(self.log_child, 0)
@@ -785,7 +785,7 @@ class ForkWorker(Worker):
         any_sad_children = False
         any_bored_children = False
 
-        self.debug('loop', 'starting work loop, can_start_more={!r}'
+        self.debug('loop', 'starting work loop, can_start_more={0!r}'
                    .format(can_start_more))
 
         # See if anyone has died
@@ -802,40 +802,40 @@ class ForkWorker(Worker):
                 break
             elif pid == self.log_child:
                 self.debug('children',
-                           'log child with pid {} exited'.format(pid))
+                           'log child with pid {0} exited'.format(pid))
                 self.start_log_child()
             elif pid in self.children:
                 self.children.remove(pid)
                 if os.WIFEXITED(status):
                     code = os.WEXITSTATUS(status)
                     self.debug('children',
-                               'worker {} exited with code {}'
+                               'worker {0} exited with code {1}'
                                .format(pid, code))
                     if code == SingleWorker.EXIT_SUCCESS:
                         any_happy_children = True
                     elif code == SingleWorker.EXIT_EXCEPTION:
                         self.log(logging.WARNING,
-                                 'child {} reported failure'.format(pid))
+                                 'child {0} reported failure'.format(pid))
                         any_sad_children = True
                     elif code == SingleWorker.EXIT_BORED:
                         any_bored_children = True
                     else:
                         self.log(logging.WARNING,
-                                 'child {} had odd exit code {}'
+                                 'child {0} had odd exit code {1}'
                                  .format(pid, code))
                 elif os.WIFSIGNALED(status):
                     self.log(logging.WARNING,
-                             'child {} exited with signal {}'
+                             'child {0} exited with signal {1}'
                              .format(pid, os.WTERMSIG(status)))
                     any_sad_children = True
                 else:
                     self.log(logging.WARNING,
-                             'child {} went away with unknown status {}'
+                             'child {0} went away with unknown status {1}'
                              .format(pid, status))
                     any_sad_children = True
             else:
                 self.log(logging.WARNING,
-                         'child {} exited, but we don\'t recognize it'
+                         'child {0} exited, but we don\'t recognize it'
                          .format(pid))
 
         # ...what next?
@@ -864,7 +864,7 @@ class ForkWorker(Worker):
                 sys.exit(SingleWorker.EXIT_EXCEPTION)
             else:
                 # We are the parent
-                self.debug('children', 'new worker with pid {}'.format(pid))
+                self.debug('children', 'new worker with pid {0}'.format(pid))
                 self.children.add(pid)
                 self.debug('loop', 'exit work loop with a new worker')
                 return self.spawn_interval
@@ -959,7 +959,7 @@ class ForkWorker(Worker):
         and spawns off a bunch of child processes.
 
         '''
-        setproctitle('rejester fork_worker for namespace {}'
+        setproctitle('rejester fork_worker for namespace {0}'
                      .format(self.config.get('namespace', None)))
         self.set_signal_handlers()
         try:
@@ -970,7 +970,7 @@ class ForkWorker(Worker):
                     mode = self.heartbeat()
                     if mode != self.last_mode:
                         self.log(logging.INFO,
-                                 'rejester global mode is {!r}'.format(mode))
+                                 'rejester global mode is {0!r}'.format(mode))
                         self.last_mode = mode
                     self.heartbeat_deadline = (time.time() +
                                                self.heartbeat_interval)
