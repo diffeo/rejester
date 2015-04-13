@@ -189,6 +189,82 @@ def test_del_work_units_by_name_and_state(task_master, state):
     assert work_unit_keys == set(st[0:2] for st in expected)
 
 
+def prepare_two_of_each(task_master):
+    task_master.update_bundle(work_spec, {'FA': {'x': 1}, 'IL': {'x': 1}})
+    wu = task_master.get_work('worker', available_gb=16)
+    wu.fail()
+    wu = task_master.get_work('worker', available_gb=16)
+    wu.fail()
+
+    task_master.update_bundle(work_spec, {'FI': {'x': 1}, 'NI': {'x': 1}})
+    wu = task_master.get_work('worker', available_gb=16)
+    wu.finish()
+    wu = task_master.get_work('worker', available_gb=16)
+    wu.finish()
+
+    task_master.update_bundle(work_spec, {'PE': {'x': 1}, 'ND': {'x': 1}})
+    wu = task_master.get_work('worker', available_gb=16)
+    wu = task_master.get_work('worker', available_gb=16)
+
+    task_master.update_bundle(work_spec, {'AV': {'x': 1}, 'AI': {'x': 1}})
+
+
+@pytest.mark.parametrize('state', STATES)
+def test_del_work_units_by_name2(task_master, state):
+    prepare_two_of_each(task_master)
+
+    rc = task_master.del_work_units(work_spec['name'],
+                                    work_unit_keys=[state[:2]])
+    assert rc == 1
+
+    # This deletes FA but leaves IL
+    expected = set(st[0:2]for st in STATES)
+    expected.update(set(st[2:4] for st in STATES))
+    expected.remove(state[0:2])
+
+    work_units = task_master.get_work_units(work_spec['name'])
+    work_unit_keys = set(p[0] for p in work_units)
+    assert work_unit_keys == expected
+
+
+@pytest.mark.parametrize('state', STATES)
+def test_del_work_units_by_state2(task_master, state):
+    prepare_two_of_each(task_master)
+
+    rc = task_master.del_work_units(work_spec['name'],
+                                    state=WORK_UNIT_STATUS_BY_NAME[state])
+    assert rc == 2
+
+    # These deletes both FA and IL
+    expected = set(st[0:2]for st in STATES)
+    expected.update(set(st[2:4] for st in STATES))
+    expected.remove(state[0:2])
+    expected.remove(state[2:4])
+
+    work_units = task_master.get_work_units(work_spec['name'])
+    work_unit_keys = set(p[0] for p in work_units)
+    assert work_unit_keys == expected
+
+
+@pytest.mark.parametrize('state', STATES)
+def test_del_work_units_by_name_and_state2(task_master, state):
+    prepare_two_of_each(task_master)
+
+    rc = task_master.del_work_units(work_spec['name'],
+                                    work_unit_keys=[state[:2]],
+                                    state=WORK_UNIT_STATUS_BY_NAME[state])
+    assert rc == 1
+
+    # This deletes FA but leaves IL
+    expected = set(st[0:2]for st in STATES)
+    expected.update(set(st[2:4] for st in STATES))
+    expected.remove(state[0:2])
+
+    work_units = task_master.get_work_units(work_spec['name'])
+    work_unit_keys = set(p[0] for p in work_units)
+    assert work_unit_keys == expected
+
+
 def test_task_master_reset_all(task_master):
     work_units = dict(foo={}, bar={})
     task_master.update_bundle(work_spec, work_units)
