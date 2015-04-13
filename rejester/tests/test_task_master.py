@@ -9,7 +9,8 @@ import uuid
 
 import pytest
 
-from rejester._task_master import WORK_UNITS_, _FINISHED
+from rejester._task_master import WORK_UNITS_, _FINISHED, \
+    WORK_UNIT_STATUS_BY_NAME
 from rejester.exceptions import LostLease, NoSuchWorkUnitError
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,84 @@ def test_list_work_units_start_limit(task_master):
 
     u = task_master.list_work_units(work_spec['name'], start=2, limit=1)
     assert u == {}
+
+
+def test_del_work_units_simple(task_master):
+    work_units = dict(foo={'length': 3}, bar={'length': 6})
+    task_master.update_bundle(work_spec, work_units)
+
+    rc = task_master.del_work_units(work_spec['name'],
+                                    work_unit_keys=['foo'])
+    assert rc == 1
+    assert (task_master.get_work_units(work_spec['name']) ==
+            [('bar', {'length': 6})])
+
+
+STATES = ['AVAILABLE', 'PENDING', 'FINISHED', 'FAILED']
+
+
+def prepare_one_of_each(task_master):
+    task_master.update_bundle(work_spec, {'FA': {'x': 1}})
+    wu = task_master.get_work('worker', available_gb=16)
+    assert wu.key == 'FA'
+    wu.fail()
+
+    task_master.update_bundle(work_spec, {'FI': {'x': 1}})
+    wu = task_master.get_work('worker', available_gb=16)
+    assert wu.key == 'FI'
+    wu.finish()
+
+    task_master.update_bundle(work_spec, {'PE': {'x': 1}})
+    wu = task_master.get_work('worker', available_gb=16)
+    assert wu.key == 'PE'
+
+    task_master.update_bundle(work_spec, {'AV': {'x': 1}})
+
+
+@pytest.mark.parametrize('state', STATES)
+def test_del_work_units_by_name(task_master, state):
+    prepare_one_of_each(task_master)
+
+    rc = task_master.del_work_units(work_spec['name'],
+                                    work_unit_keys=[state[:2]])
+    assert rc == 1
+
+    expected = set(STATES)
+    expected.remove(state)
+    work_units = task_master.get_work_units(work_spec['name'])
+    work_unit_keys = set(p[0] for p in work_units)
+    assert work_unit_keys == set(st[0:2] for st in expected)
+
+
+@pytest.mark.parametrize('state', STATES)
+def test_del_work_units_by_state(task_master, state):
+    prepare_one_of_each(task_master)
+
+    rc = task_master.del_work_units(work_spec['name'],
+                                    state=WORK_UNIT_STATUS_BY_NAME[state])
+    assert rc == 1
+
+    expected = set(STATES)
+    expected.remove(state)
+    work_units = task_master.get_work_units(work_spec['name'])
+    work_unit_keys = set(p[0] for p in work_units)
+    assert work_unit_keys == set(st[0:2] for st in expected)
+
+
+@pytest.mark.parametrize('state', STATES)
+def test_del_work_units_by_name_and_state(task_master, state):
+    prepare_one_of_each(task_master)
+
+    rc = task_master.del_work_units(work_spec['name'],
+                                    work_unit_keys=[state[:2]],
+                                    state=WORK_UNIT_STATUS_BY_NAME[state])
+    assert rc == 1
+
+    expected = set(STATES)
+    expected.remove(state)
+    work_units = task_master.get_work_units(work_spec['name'])
+    work_unit_keys = set(p[0] for p in work_units)
+    assert work_unit_keys == set(st[0:2] for st in expected)
 
 
 def test_task_master_reset_all(task_master):

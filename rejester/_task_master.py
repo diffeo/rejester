@@ -961,12 +961,27 @@ class TaskMaster(object):
         with self.registry.lock(identifier=self.worker_id) as session:
             return session.get(WORK_SPECS, work_spec_name)
 
-    def get_work_units(self, work_spec_name, work_unit_keys=None, state=None, limit=None, start=None):
-        '''
-        options={work_unit_keys=None, state=None, limit=None, start=None}
-        options['state'] accepts either a single state or a list/tuple of states
+    def get_work_units(self, work_spec_name, work_unit_keys=None,
+                       state=None, limit=None, start=None):
+        '''Get (key, value) pairs for work units.
 
-        returns [(wu key, wu data), ...]
+        If `state` is not :const:`None`, then it should be one of
+        the string state constants, and this function will return
+        a list of pairs of work unit key and value for work units
+        in that state.  If `start` is not :const:`None`, then this
+        many work units are skipped; if `limit` is not :const:`None`
+        then at most this many work units will be returned.
+
+        If `state` is :const:`None` then all work units in all
+        states will be returned.
+
+        :param str work_spec_name: name of work spec to query
+        :param str state: string state constant, or :const:`None`
+          for all work units in all states
+        :param int limit: maximum number of items to return
+        :param int start: skip this many items before returning any
+        :return: list of pairs of (work unit key, work unit data)
+
         '''
         if work_unit_keys is not None:
             raise NotImplementedError("get_work_units(by work_unit_keys)")
@@ -974,17 +989,30 @@ class TaskMaster(object):
             start = 0
         if state is not None:
             if state == AVAILABLE:
-                return self.list_available_work_units(work_spec_name, start=start, limit=limit).items()
+                return self.list_available_work_units(
+                    work_spec_name, start=start, limit=limit).items()
             if state == PENDING:
-                return self.list_pending_work_units(work_spec_name, start=start, limit=limit).items()
+                return self.list_pending_work_units(
+                    work_spec_name, start=start, limit=limit).items()
             if state == BLOCKED:
-                return self.list_blocked_work_units(work_spec_name, start=start, limit=limit).items()
+                return self.list_blocked_work_units(
+                    work_spec_name, start=start, limit=limit).items()
             if state == FINISHED:
-                return self.list_finished_work_units(work_spec_name, start=start, limit=limit).items()
+                return self.list_finished_work_units(
+                    work_spec_name, start=start, limit=limit).items()
             if state == FAILED:
-                return self.list_failed_work_units(work_spec_name, start=start, limit=limit).items()
+                return self.list_failed_work_units(
+                    work_spec_name, start=start, limit=limit).items()
             raise ProgrammerError("unknown state {0!r}".format(state))
-        return self.list_work_units(work_spec_name, start=start, limit=limit)
+        # TODO: correctly handle start/limit for the case where
+        # we're trying to list everything (unqualified)...this is
+        # actually kind of limited utility
+        work_units = {}
+        work_units.update(self.list_work_units(work_spec_name))
+        work_units.update(self.list_blocked_work_units(work_spec_name))
+        work_units.update(self.list_finished_work_units(work_spec_name))
+        work_units.update(self.list_failed_work_units(work_spec_name))
+        return work_units.items()
 
     def list_work_units(self, work_spec_name, start=0, limit=None):
         """Get a dictionary of work units for some work spec.
