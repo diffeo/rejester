@@ -382,7 +382,7 @@ class Manager(ArgParseCmd):
                 self.stdout.write('not deleting anything\n')
                 return
         self.stdout.write('deleting namespace {0!r}\n'.format(namespace))
-        self.task_master.registry.delete_namespace()
+        self.task_master.clear()
 
     def args_work_specs(self, parser):
         pass

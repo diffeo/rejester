@@ -1145,6 +1145,12 @@ class TaskMaster(object):
             count += self.remove_finished_work_units(work_spec_name, work_unit_keys)
         return count
 
+    def clear(self):
+        '''Delete everything.
+        Deletes all work units and all work specs.
+        '''
+        self.registry.delete_namespace()
+
     def remove_available_work_units(self, work_spec_name, work_unit_names):
         '''Remove some work units in the available queue.
 
