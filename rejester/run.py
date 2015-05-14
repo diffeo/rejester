@@ -420,9 +420,20 @@ class Manager(ArgParseCmd):
                           '\n')
 
     def args_summary(self, parser):
-        pass
+        parser.add_argument('--json', default=False, action='store_true',
+                            help='write output in json')
     def do_summary(self, args):
         '''print a summary of running rejester work'''
+        if args.json:
+            xd = {}
+            for ws in self.task_master.iter_work_specs():
+                name = ws['name']
+                status = self.task_master.status(name)
+                xd[name] = status
+            xd['_NOW'] = time.time()
+            self.stdout.write(json.dumps(xd) + '\n')
+            return
+
         self.stdout.write('Work spec               Avail  Pending  Blocked'
                           '   Failed Finished    Total\n')
         self.stdout.write('==================== ======== ======== ========'
@@ -675,14 +686,29 @@ class Manager(ArgParseCmd):
 
     def args_run_one(self, parser):
         parser.add_argument('--from-work-spec', action='append', default=[], help='workspec name to accept work from, may be repeated.')
+        parser.add_argument('--limit-seconds', default=None, type=int, metavar='N', help='stop after running for N seconds')
+        parser.add_argument('--limit-count', default=None, type=int, metavar='N', help='stop after running for N work units')
     def do_run_one(self, args):
         '''run a single job'''
         work_spec_names = args.from_work_spec or None
         worker = SingleWorker(self.config, task_master=self.task_master, work_spec_names=work_spec_names)
         worker.register()
         rc = False
+        starttime = time.time()
+        count = 0
         try:
-            rc = worker.run()
+            while True:
+                rc = worker.run()
+                if not rc:
+                    break
+                count += 1
+                if (args.limit_seconds is None) and (args.limit_count is None):
+                    # only do one
+                    break
+                if (args.limit_seconds is not None) and ((time.time() - starttime) >= args.limit_seconds):
+                    break
+                if (args.limit_count is not None) and (count >= args.limit_count):
+                    break
         finally:
             worker.unregister()
         if not rc:
