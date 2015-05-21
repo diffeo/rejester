@@ -422,29 +422,39 @@ class Manager(ArgParseCmd):
     def args_summary(self, parser):
         parser.add_argument('--json', default=False, action='store_true',
                             help='write output in json')
+        parser.add_argument('--text', default=None, action='store_true',
+                            help='write output in text')
     def do_summary(self, args):
         '''print a summary of running rejester work'''
-        if args.json:
-            xd = {}
-            for ws in self.task_master.iter_work_specs():
-                name = ws['name']
-                status = self.task_master.status(name)
-                xd[name] = status
-            xd['_NOW'] = time.time()
-            self.stdout.write(json.dumps(xd) + '\n')
-            return
+        assert args.json or args.text or (args.text is None)
+        do_text = args.text
 
-        self.stdout.write('Work spec               Avail  Pending  Blocked'
-                          '   Failed Finished    Total\n')
-        self.stdout.write('==================== ======== ======== ========'
-                          ' ======== ======== ========\n')
+        xd = {}
         for ws in self.task_master.iter_work_specs():
             name = ws['name']
             status = self.task_master.status(name)
-            self.stdout.write('{0:20s} {1[num_available]:8d} '
-                              '{1[num_pending]:8d} {1[num_blocked]:8d} '
-                              '{1[num_failed]:8d} {1[num_finished]:8d} '
-                              '{1[num_tasks]:8d}\n'.format(name, status))
+            xd[name] = status
+        xd['_NOW'] = time.time()
+
+        if args.json:
+            self.stdout.write(json.dumps(xd) + '\n')
+        else:
+            if do_text is None:
+                do_text = True
+
+        if do_text:
+            self.stdout.write('Work spec               Avail  Pending  Blocked'
+                              '   Failed Finished    Total\n')
+            self.stdout.write('==================== ======== ======== ========'
+                              ' ======== ======== ========\n')
+            for name in sorted(xd.keys()):
+                if name == '_NOW':
+                    continue
+                status = xd[name]
+                self.stdout.write('{0:20s} {1[num_available]:8d} '
+                                  '{1[num_pending]:8d} {1[num_blocked]:8d} '
+                                  '{1[num_failed]:8d} {1[num_finished]:8d} '
+                                  '{1[num_tasks]:8d}\n'.format(name, status))
 
     def args_work_units(self, parser):
         self._add_work_spec_name_args(parser)
