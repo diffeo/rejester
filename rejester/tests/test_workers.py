@@ -359,6 +359,7 @@ def test_fork_worker_expiry_kill(task_master, tmpdir):
         }
 
 
+@pytest.mark.skipif(reason='non-deterministically fails')  # noqa
 @pytest.mark.slow  # noqa
 def test_fork_worker_expiry_dup(task_master, tmpdir):
     '''Test that job expiration and default_lifetime work as expected.'''
