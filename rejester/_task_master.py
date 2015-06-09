@@ -1598,7 +1598,7 @@ class TaskMaster(object):
         with self.registry.lock(identifier=self.worker_id) as session:
             session.update(NICE_LEVELS, dict(work_spec_name=nice))
 
-    def get_work(self, worker_id, available_gb=None, lease_time=None, work_spec_names=None):
+    def get_work(self, worker_id, available_gb=None, lease_time=None, work_spec_names=None, max_jobs=None):
         '''obtain a WorkUnit instance based on available memory for the
         worker process.  
         
@@ -1607,12 +1607,16 @@ class TaskMaster(object):
         :param available_gb: number of gigabytes of RAM available to
           this worker
         :param lease_time: how many seconds to lease a WorkUnit
+        :param int max_jobs: maximum number of work units to return (default 1)
         :param work_spec_names: limit to queue from one work_spec. NOT IMPLEMENTD. this implementation will return work from any work spec.
 
         '''
 
         if not isinstance(available_gb, (int, float)):
             raise ProgrammerError('must specify available_gb')
+
+        if (max_jobs is not None) and (max_jobs != 1):
+            logger.error('redis rejester does not support max_jobs. ignoring and getting 1')
 
         if lease_time is None:
             lease_time = self.default_lifetime

@@ -12,6 +12,8 @@ import socket
 
 import redis
 
+from rejester.exceptions import ProgrammerError
+
 logger = logging.getLogger(__name__)
 
 class RedisBase(object):

@@ -355,9 +355,10 @@ class SingleWorker(Worker):
     which calls :meth:`as_child`.
 
     '''
-    def __init__(self, config, task_master=None, work_spec_names=None):
+    def __init__(self, config, task_master=None, work_spec_names=None, max_jobs=1):
         super(SingleWorker, self).__init__(config, task_master)
         self.work_spec_names = work_spec_names
+        self.max_jobs = config.get('worker_job_fetch', max_jobs)
 
     def run(self, set_title=False):
         '''Do some work.
@@ -385,10 +386,27 @@ class SingleWorker(Worker):
 
         '''
         available_gb = MultiWorker.available_gb()
-        unit = self.task_master.get_work(self.worker_id, available_gb, work_spec_names=self.work_spec_names)
-        if unit is None:
+        unit = self.task_master.get_work(self.worker_id, available_gb, work_spec_names=self.work_spec_names, max_jobs=self.max_jobs)
+        if not unit:
             logger.info('No work to do; stopping.')
             return False
+        if isinstance(unit, (list, tuple)):
+            ok = True
+            for xunit in unit:
+                if not ok:
+                    try:
+                        xunit.update(-1)
+                    except LostLease as e:
+                        pass
+                    except Exception as bad:
+                        # we're already quitting everything, but this is weirdly bad.
+                        logger.error('failed to release lease on %r %r', xunit.work_spec_name, xunit.key, exc_info=True)
+                else:
+                    ok = self._run_unit(xunit, set_title)
+            return ok
+        return self._run_unit(unit)
+
+    def _run_unit(self, unit, set_title=False):
         try:
             if set_title:
                 setproctitle('rejester worker {0!r} {1!r}'
@@ -881,13 +899,19 @@ class ForkWorker(Worker):
         # isn't really now now, but now plus a grace period to make
         # sure spinning jobs don't get retried.
         now = time.time() + self.stop_jobs_early
-        for child, wu in child_jobs.iteritems():
-            if wu is None:
+        for child, wul in child_jobs.iteritems():
+            if not isinstance(wul, (list, tuple)):
+                # Support old style get_child_work_units which returns
+                # single WorkUnit objects instead of list of them.
+                wul = [wul]
+            if not wul:
                 # This worker is idle, but oddly, still present; it should
                 # clean up after itself
                 continue
-            if wu.worker_id == child and wu.expires > now:
-                # We are still working on a not-overdue job
+            # filter on those actually assigned to the child worker
+            wul = filter(lambda wu: wu.worker_id == child, wul)
+            # check for any still active not-overdue job
+            if any(filter(lambda wu: wu.expires > now, wul)):
                 continue
             # So either someone else is doing its work or it's just overdue
             environment = self.task_master.get_heartbeat(child)
@@ -900,7 +924,7 @@ class ForkWorker(Worker):
             os.kill(environment['pid'], signal.SIGTERM)
             # This will cause the child to die, and do_some_work will
             # reap it; but we'd also like the job to fail if possible
-            if wu.worker_id == child:
+            for wu in wul:
                 if wu.data is None:
                     logger.critical('how did wu.data become: %r' % wu.data)
                 else:
