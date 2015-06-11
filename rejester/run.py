@@ -698,10 +698,11 @@ class Manager(ArgParseCmd):
         parser.add_argument('--from-work-spec', action='append', default=[], help='workspec name to accept work from, may be repeated.')
         parser.add_argument('--limit-seconds', default=None, type=int, metavar='N', help='stop after running for N seconds')
         parser.add_argument('--limit-count', default=None, type=int, metavar='N', help='stop after running for N work units')
+        parser.add_argument('--max-jobs', default=None, type=int, metavar='N', help='fetch up to N work units at once')
     def do_run_one(self, args):
         '''run a single job'''
         work_spec_names = args.from_work_spec or None
-        worker = SingleWorker(self.config, task_master=self.task_master, work_spec_names=work_spec_names)
+        worker = SingleWorker(self.config, task_master=self.task_master, work_spec_names=work_spec_names, max_jobs=args.max_jobs)
         worker.register()
         rc = False
         starttime = time.time()
